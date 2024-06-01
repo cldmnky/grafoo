@@ -20,16 +20,17 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
 // GrafanaSpec defines the desired state of Grafana
 type GrafanaSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	// Foo is an example field of Grafana. Edit grafana_types.go to remove/update
-	Foo string `json:"foo,omitempty"`
+	Version string `json:"version,omitempty"`
+	Dex     *Dex   `json:"dex,omitempty"`
+}
+
+type Dex struct {
+	Enabled bool `json:"disabled,omitempty"`
 }
 
 // GrafanaStatus defines the observed state of Grafana

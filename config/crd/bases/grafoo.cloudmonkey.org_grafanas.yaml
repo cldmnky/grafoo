@@ -34,9 +34,12 @@ spec:
           spec:
             description: GrafanaSpec defines the desired state of Grafana
             properties:
-              foo:
-                description: Foo is an example field of Grafana. Edit grafana_types.go
-                  to remove/update
+              dex:
+                properties:
+                  disabled:
+                    type: boolean
+                type: object
+              version:
                 type: string
             type: object
           status:

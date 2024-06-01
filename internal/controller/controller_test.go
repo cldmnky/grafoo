@@ -19,13 +19,13 @@ package controller
 import (
 	"context"
 
+	grafanav1beta1 "github.com/grafana/grafana-operator/v5/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	"k8s.io/apimachinery/pkg/api/errors"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
-
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	grafoov1alpha1 "github.com/cldmnky/grafoo/api/v1alpha1"
 )
@@ -41,6 +41,7 @@ var _ = Describe("Grafana Controller", func() {
 			Namespace: "default", // TODO(user):Modify as needed
 		}
 		grafana := &grafoov1alpha1.Grafana{}
+		grafanaOperated := &grafanav1beta1.Grafana{}
 
 		BeforeEach(func() {
 			By("creating the custom resource for the Kind Grafana")
@@ -77,8 +78,14 @@ var _ = Describe("Grafana Controller", func() {
 				NamespacedName: typeNamespacedName,
 			})
 			Expect(err).NotTo(HaveOccurred())
-			// TODO(user): Add more specific assertions depending on your controller's reconciliation logic.
-			// Example: If you expect a certain status condition after reconciliation, verify it here.
+			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
+			// expect a grafana instance to be created
+			Expect(k8sClient.Get(ctx, typeNamespacedName, grafanaOperated)).To(Succeed())
+			// The Grafana instance should have the same name as the custom resource
+			Expect(grafanaOperated.Name).To(Equal(resourceName))
+			// The grafana instance should have owner reference set to the custom resource
+			Expect(grafanaOperated.OwnerReferences).To(HaveLen(1))
+			Expect(grafanaOperated.OwnerReferences[0].Name).To(Equal(resourceName))
 		})
 	})
 })

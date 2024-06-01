@@ -21,6 +21,8 @@ import (
 	"flag"
 	"os"
 
+	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.
+	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.
 	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
 	// to ensure that exec-entrypoint and run can make use of them.
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -33,6 +35,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
+
+	grafanav1beta1 "github.com/grafana/grafana-operator/v5/api/v1beta1"
 
 	grafoov1alpha1 "github.com/cldmnky/grafoo/api/v1alpha1"
 	"github.com/cldmnky/grafoo/internal/controller"
@@ -49,6 +53,8 @@ func init() {
 
 	utilruntime.Must(grafoov1alpha1.AddToScheme(scheme))
 	//+kubebuilder:scaffold:scheme
+
+	utilruntime.Must(grafanav1beta1.AddToScheme(scheme))
 }
 
 func main() {
@@ -128,6 +134,12 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Grafana")
 		os.Exit(1)
+	}
+	if os.Getenv("ENABLE_WEBHOOKS") != "false" {
+		if err = (&grafoov1alpha1.Grafana{}).SetupWebhookWithManager(mgr); err != nil {
+			setupLog.Error(err, "unable to create webhook", "webhook", "Grafana")
+			os.Exit(1)
+		}
 	}
 	//+kubebuilder:scaffold:builder
 

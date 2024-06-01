@@ -19,6 +19,8 @@ package controller
 import (
 	"context"
 
+	grafanav1beta1 "github.com/grafana/grafana-operator/v5/api/v1beta1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -26,6 +28,8 @@ import (
 
 	grafoov1alpha1 "github.com/cldmnky/grafoo/api/v1alpha1"
 )
+
+var ()
 
 // GrafanaReconciler reconciles a Grafana object
 type GrafanaReconciler struct {
@@ -37,19 +41,36 @@ type GrafanaReconciler struct {
 //+kubebuilder:rbac:groups=grafoo.cloudmonkey.org,resources=grafanas/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=grafoo.cloudmonkey.org,resources=grafanas/finalizers,verbs=update
 
-// Reconcile is part of the main kubernetes reconciliation loop which aims to
-// move the current state of the cluster closer to the desired state.
-// TODO(user): Modify the Reconcile function to compare the state specified by
-// the Grafana object against the actual cluster state, and then
-// perform operations to make the cluster state reflect the state specified by
-// the user.
-//
-// For more details, check Reconcile and its Result here:
-// - https://pkg.go.dev/sigs.k8s.io/controller-runtime@v0.16.3/pkg/reconcile
 func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
-	_ = log.FromContext(ctx)
+	logger := log.FromContext(ctx)
+	logger.Info("Reconciling Grafana")
 
-	// TODO(user): your logic here
+	// Fetch the Grafana instance
+	instance := &grafoov1alpha1.Grafana{}
+	err := r.Get(ctx, req.NamespacedName, instance)
+	if err != nil {
+		logger.Error(err, "Failed to get Grafana instance")
+		return ctrl.Result{}, err
+	}
+
+	// Create a mariadb instance
+
+	// Create a Grafana instance
+	grafana := &grafanav1beta1.Grafana{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      instance.Name,
+			Namespace: instance.Namespace,
+		},
+	}
+
+	op, err := CreateOrUpdateWithRetries(ctx, r.Client, grafana, func() error {
+		return ctrl.SetControllerReference(instance, grafana, r.Scheme)
+	})
+	logger.Info("grafana", "op", op)
+
+	// Create a dex instance for authentication
+
+	// Create a datasource instance
 
 	return ctrl.Result{}, nil
 }
@@ -58,5 +79,6 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 func (r *GrafanaReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&grafoov1alpha1.Grafana{}).
+		Owns(&grafanav1beta1.Grafana{}).
 		Complete(r)
 }

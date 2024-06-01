@@ -1,0 +1,12 @@
+apiVersion: grafoo.cloudmonkey.org/v1alpha1
+kind: Grafana
+metadata:
+  labels:
+    app.kubernetes.io/name: grafana
+    app.kubernetes.io/instance: grafana-sample
+    app.kubernetes.io/part-of: grafoo
+    app.kubernetes.io/managed-by: kustomize
+    app.kubernetes.io/created-by: grafoo
+  name: grafana-sample
+spec:
+  # TODO(user): Add fields here

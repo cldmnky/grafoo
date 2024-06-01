@@ -1,0 +1,4 @@
+## Append samples of your project ##
+resources:
+- grafoo_v1alpha1_grafana.yaml
+#+kubebuilder:scaffold:manifestskustomizesamples

@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 
 	configv1 "github.com/openshift/api/config/v1"
 	appsv1 "k8s.io/api/apps/v1"
@@ -12,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	grafoov1alpha1 "github.com/cldmnky/grafoo/api/v1alpha1"
+	"github.com/cldmnky/grafoo/internal/defaults"
 )
 
 func (r *GrafanaReconciler) ReconcileDex(ctx context.Context, instance *grafoov1alpha1.Grafana) error {
@@ -91,6 +93,54 @@ web:
 						{
 							Name:  "dex",
 							Image: "dexidp/dex:v2.39.1-distroless",
+							Args: []string{
+								"dex",
+								"serve",
+								"--web-http-addr",
+								fmt.Sprintf("0.0.0.0:%d", defaults.DexHttpPort),
+								"--grpc-addr",
+								fmt.Sprintf("0.0.0.0:%d", defaults.DexGrpcPort),
+								"--telemetry-addr",
+								fmt.Sprintf("0.0.0.0:%d", defaults.DexMetricsPort),
+								"/config/config.yaml",
+							},
+							Ports: []corev1.ContainerPort{
+								{
+									ContainerPort: defaults.DexHttpPort,
+									Name:          "http",
+								}, {
+									ContainerPort: defaults.DexGrpcPort,
+									Name:          "grpc",
+								}, {
+									ContainerPort: defaults.DexMetricsPort,
+									Name:          "metrics",
+								},
+							},
+							SecurityContext: &corev1.SecurityContext{
+								AllowPrivilegeEscalation: boolPtr(false),
+								Capabilities: &corev1.Capabilities{
+									Drop: []corev1.Capability{
+										"ALL",
+									},
+								},
+								RunAsNonRoot: boolPtr(true),
+							},
+							VolumeMounts: []corev1.VolumeMount{{
+								Name:      "config-volume",
+								MountPath: "/config",
+							}},
+						},
+					},
+					Volumes: []corev1.Volume{
+						{
+							Name: "config-volume",
+							VolumeSource: corev1.VolumeSource{
+								ConfigMap: &corev1.ConfigMapVolumeSource{
+									LocalObjectReference: corev1.LocalObjectReference{
+										Name: instance.Name + "-dex",
+									},
+								},
+							},
 						},
 					},
 				},

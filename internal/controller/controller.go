@@ -74,6 +74,9 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			Name:      instance.Name,
 			Namespace: instance.Namespace,
 		},
+		Spec: grafanav1beta1.GrafanaSpec{
+			Version: instance.Spec.Version,
+		},
 	}
 
 	op, err := CreateOrUpdateWithRetries(ctx, r.Client, grafana, func() error {

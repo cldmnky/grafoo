@@ -3,6 +3,8 @@ package v1alpha1
 import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+
+	"github.com/cldmnky/grafoo/internal/defaults"
 )
 
 var _ = Describe("Grafana Webhook", func() {
@@ -15,7 +17,7 @@ var _ = Describe("Grafana Webhook", func() {
 				},
 			}
 			g.Default()
-			Expect(g.Spec.Version).To(Equal("10.4.3"))
+			Expect(g.Spec.Version).To(Equal(defaults.GrafanaVersion))
 			Expect(g.Spec.Dex).ToNot(BeNil())
 			Expect(g.Spec.Dex.Enabled).To(BeTrue())
 		})

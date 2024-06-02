@@ -30,7 +30,8 @@ type GrafanaSpec struct {
 }
 
 type Dex struct {
-	Enabled bool `json:"disabled,omitempty"`
+	Enabled bool   `json:"disabled,omitempty"`
+	Image   string `json:"image,omitempty"`
 }
 
 // GrafanaStatus defines the observed state of Grafana

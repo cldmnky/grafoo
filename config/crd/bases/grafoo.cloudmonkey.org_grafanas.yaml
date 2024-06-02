@@ -38,6 +38,8 @@ spec:
                 properties:
                   disabled:
                     type: boolean
+                  image:
+                    type: string
                 type: object
               version:
                 type: string

@@ -22,6 +22,8 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
+
+	"github.com/cldmnky/grafoo/internal/defaults"
 )
 
 // log is for logging in this package.
@@ -43,11 +45,12 @@ var _ webhook.Defaulter = &Grafana{}
 func (r *Grafana) Default() {
 	grafanalog.Info("default", "name", r.Name)
 	if r.Spec.Version == "" {
-		r.Spec.Version = "10.4.3"
+		r.Spec.Version = defaults.GrafanaVersion
 	}
 	if r.Spec.Dex == nil {
 		r.Spec.Dex = &Dex{
 			Enabled: true,
+			Image:   defaults.DexImage,
 		}
 	}
 }

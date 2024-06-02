@@ -30,3 +30,12 @@ func CreateOrUpdateWithRetries(
 	})
 	return operationResult, updateErr
 }
+
+// boolPtr returns a pointer to val
+func boolPtr(val bool) *bool {
+	return &val
+}
+
+func int64Ptr(val int64) *int64 {
+	return &val
+}

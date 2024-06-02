@@ -22,6 +22,7 @@ import (
 	grafanav1beta1 "github.com/grafana/grafana-operator/v5/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	configv1 "github.com/openshift/api/config/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -52,10 +53,20 @@ var _ = Describe("Grafana Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
-					// TODO(user): Specify other spec details if needed.
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
+			By("creating a cluster ingress object")
+			ingress := &configv1.Ingress{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "cluster",
+				},
+				Spec: configv1.IngressSpec{
+					Domain: "apps.foo.bar",
+				},
+			}
+			Expect(k8sClient.Create(ctx, ingress)).To(Succeed())
+
 		})
 
 		AfterEach(func() {
@@ -66,6 +77,12 @@ var _ = Describe("Grafana Controller", func() {
 
 			By("Cleanup the specific resource instance Grafana")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
+
+			By("Cleanup the specific resource instance cluster ingress")
+			ingress := &configv1.Ingress{}
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: "cluster"}, ingress)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Delete(ctx, ingress)).To(Succeed())
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")

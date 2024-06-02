@@ -20,27 +20,22 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
+	//+kubebuilder:scaffold:imports
 
-	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.
-	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.
-	// Import all Kubernetes client auth plugins (e.g. Azure, GCP, OIDC, etc.)
-	// to ensure that exec-entrypoint and run can make use of them.
-	_ "k8s.io/client-go/plugin/pkg/client/auth"
-
+	grafanav1beta1 "github.com/grafana/grafana-operator/v5/api/v1beta1"
+	configv1 "github.com/openshift/api/config/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	_ "k8s.io/client-go/plugin/pkg/client/auth"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
-	grafanav1beta1 "github.com/grafana/grafana-operator/v5/api/v1beta1"
-
 	grafoov1alpha1 "github.com/cldmnky/grafoo/api/v1alpha1"
 	"github.com/cldmnky/grafoo/internal/controller"
-	//+kubebuilder:scaffold:imports
 )
 
 var (
@@ -55,6 +50,8 @@ func init() {
 	//+kubebuilder:scaffold:scheme
 
 	utilruntime.Must(grafanav1beta1.AddToScheme(scheme))
+
+	utilruntime.Must(configv1.AddToScheme(scheme))
 }
 
 func main() {

@@ -40,6 +40,11 @@ type GrafanaReconciler struct {
 //+kubebuilder:rbac:groups=grafoo.cloudmonkey.org,resources=grafanas,verbs=get;list;watch;create;update;patch;delete
 //+kubebuilder:rbac:groups=grafoo.cloudmonkey.org,resources=grafanas/status,verbs=get;update;patch
 //+kubebuilder:rbac:groups=grafoo.cloudmonkey.org,resources=grafanas/finalizers,verbs=update
+// +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=apps,resources=deployments/status,verbs=get
+// +kubebuilder:rbac:groups=grafana.integreatly.org,resources=grafanas,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=config.openshift.io,resources=ingresses,verbs=get;list;watch
+// +kubebuilder:rbac:groups="",resources=secrets,verbs=get;list;watch;create;update;patch;delete
 
 func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -51,6 +56,14 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if err != nil {
 		logger.Error(err, "Failed to get Grafana instance")
 		return ctrl.Result{}, err
+	}
+
+	// Reconcile dex
+	if instance.Spec.Dex != nil && instance.Spec.Dex.Enabled {
+		if err := r.ReconcileDex(ctx, instance); err != nil {
+			logger.Error(err, "Failed to reconcile dex")
+			return ctrl.Result{}, err
+		}
 	}
 
 	// Create a mariadb instance
@@ -67,8 +80,6 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.SetControllerReference(instance, grafana, r.Scheme)
 	})
 	logger.Info("grafana", "op", op)
-
-	// Create a dex instance for authentication
 
 	// Create a datasource instance
 

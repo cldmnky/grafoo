@@ -87,5 +87,33 @@ var _ = Describe("Grafana Controller", func() {
 			Expect(grafanaOperated.OwnerReferences).To(HaveLen(1))
 			Expect(grafanaOperated.OwnerReferences[0].Name).To(Equal(resourceName))
 		})
+		// Dex is enabled
+		It("should successfully reconcile the resource with Dex enabled", func() {
+			By("Reconciling the created resource")
+			// get the resource
+			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
+			grafana.Spec.Dex = &grafoov1alpha1.Dex{
+				Enabled: true,
+			}
+			Expect(k8sClient.Update(ctx, grafana)).To(Succeed())
+
+			controllerReconciler := &GrafanaReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
+			// expect a grafana instance to be created
+			Expect(k8sClient.Get(ctx, typeNamespacedName, grafanaOperated)).To(Succeed())
+			// The Grafana instance should have the same name as the custom resource
+			Expect(grafanaOperated.Name).To(Equal(resourceName))
+			// The grafana instance should have owner reference set to the custom resource
+			Expect(grafanaOperated.OwnerReferences).To(HaveLen(1))
+			Expect(grafanaOperated.OwnerReferences[0].Name).To(Equal(resourceName))
+		})
 	})
 })

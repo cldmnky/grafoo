@@ -20,6 +20,7 @@ import (
 	"crypto/sha256"
 	"fmt"
 
+	grafanav1beta1 "github.com/grafana/grafana-operator/v5/api/v1beta1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -27,9 +28,9 @@ import (
 type GrafanaSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
-
-	Version  string `json:"version,omitempty"`
-	Replicas *int32 `json:"replicas,omitempty"`
+	Grafanac grafanav1beta1.GrafanaSpec `json:"grafana,inline"`
+	Version  string                     `json:"version,omitempty"`
+	Replicas *int32                     `json:"replicas,omitempty"`
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Pattern=`^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$`
 	// IngressDomain is the domain to use for the Grafana Ingress, setting a domain will create an Ingress for Grafana and Dex as grafana.<IngressDomain> and dex.<IngressDomain>.

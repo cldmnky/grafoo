@@ -3,8 +3,6 @@ package v1alpha1
 import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-
-	"github.com/cldmnky/grafoo/internal/defaults"
 )
 
 var _ = Describe("Grafana Webhook", func() {
@@ -17,16 +15,35 @@ var _ = Describe("Grafana Webhook", func() {
 				},
 			}
 			g.Default()
-			Expect(g.Spec.Version).To(Equal(defaults.GrafanaVersion))
+			Expect(g.Spec.Version).To(Equal(GrafanaVersion))
 			Expect(g.Spec.Dex).ToNot(BeNil())
 			Expect(g.Spec.Dex.Enabled).To(BeTrue())
+			Expect(g.Spec.Dex.Image).To(Equal(DexImage))
+			Expect(g.Spec.Replicas).ToNot(BeNil())
+			Expect(*g.Spec.Replicas).To(Equal(GrafanaReplicas))
+			Expect(g.Spec.DataSources).ToNot(BeNil())
+			Expect(g.Spec.DataSources).To(Equal(DataSources))
+
 		})
 	})
 
 	Context("When creating Grafana under Validating Webhook", func() {
-		It("Should deny if a required field is empty", func() {
-
-			// TODO(user): Add your logic here
+		It("Should deny if a a data source type is not allowed", func() {
+			g := &Grafana{
+				Spec: GrafanaSpec{
+					DataSources: []DataSource{
+						{
+							Name:    "prometheus",
+							Type:    "foo-type",
+							URL:     "http://prometheus.openshift-monitoring.svc.cluster.local:9090",
+							Enabled: true,
+						},
+					},
+				},
+			}
+			warn, err := g.ValidateCreate()
+			Expect(err).To(BeNil())
+			Expect(warn).ToNot(BeNil())
 
 		})
 

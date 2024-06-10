@@ -34,13 +34,39 @@ spec:
           spec:
             description: GrafanaSpec defines the desired state of Grafana
             properties:
+              datasources:
+                items:
+                  properties:
+                    enabled:
+                      type: boolean
+                    name:
+                      type: string
+                    type:
+                      enum:
+                      - prometheus-incluster
+                      - loki-incluster
+                      - tempo-incluster
+                      type: string
+                    url:
+                      type: string
+                  type: object
+                type: array
               dex:
                 properties:
-                  disabled:
+                  enabled:
                     type: boolean
                   image:
                     type: string
                 type: object
+              domain:
+                description: IngressDomain is the domain to use for the Grafana Ingress,
+                  setting a domain will create an Ingress for Grafana and Dex as grafana.<IngressDomain>
+                  and dex.<IngressDomain>.
+                pattern: ^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$
+                type: string
+              replicas:
+                format: int32
+                type: integer
               version:
                 type: string
             type: object

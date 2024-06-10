@@ -17,6 +17,9 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"crypto/sha256"
+	"fmt"
+
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
@@ -25,13 +28,31 @@ type GrafanaSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "make" to regenerate code after modifying this file
 
-	Version string `json:"version,omitempty"`
-	Dex     *Dex   `json:"dex,omitempty"`
+	Version  string `json:"version,omitempty"`
+	Replicas *int32 `json:"replicas,omitempty"`
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Pattern=`^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$`
+	// IngressDomain is the domain to use for the Grafana Ingress, setting a domain will create an Ingress for Grafana and Dex as grafana.<IngressDomain> and dex.<IngressDomain>.
+	IngressDomain string       `json:"domain,omitempty"`
+	Dex           *Dex         `json:"dex,omitempty"`
+	DataSources   []DataSource `json:"datasources,omitempty"`
 }
 
 type Dex struct {
-	Enabled bool   `json:"disabled,omitempty"`
+	Enabled bool   `json:"enabled,omitempty"`
 	Image   string `json:"image,omitempty"`
+}
+type DataSource struct {
+	// +kubebuilder:validation:Optional
+	Name string `json:"name,omitempty"`
+	// +kubebuilder:validation:Enum=prometheus-incluster;loki-incluster;tempo-incluster
+	Type    string `json:"type,omitempty"`
+	URL     string `json:"url,omitempty"`
+	Enabled bool   `json:"enabled,omitempty"`
+}
+
+func (ds *DataSource) GetDataSourceNameHash() string {
+	return fmt.Sprintf("%x", sha256.Sum256([]byte(ds.Name)))[0:6]
 }
 
 // GrafanaStatus defines the observed state of Grafana

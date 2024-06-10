@@ -22,8 +22,6 @@ import (
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
-
-	"github.com/cldmnky/grafoo/internal/defaults"
 )
 
 // log is for logging in this package.
@@ -45,13 +43,21 @@ var _ webhook.Defaulter = &Grafana{}
 func (r *Grafana) Default() {
 	grafanalog.Info("default", "name", r.Name)
 	if r.Spec.Version == "" {
-		r.Spec.Version = defaults.GrafanaVersion
+		r.Spec.Version = GrafanaVersion
 	}
 	if r.Spec.Dex == nil {
 		r.Spec.Dex = &Dex{
 			Enabled: true,
-			Image:   defaults.DexImage,
+			Image:   DexImage,
 		}
+	}
+	// replicas
+	if r.Spec.Replicas == nil {
+		r.Spec.Replicas = &GrafanaReplicas
+	}
+	// datasources
+	if len(r.Spec.DataSources) == 0 {
+		r.Spec.DataSources = DataSources
 	}
 }
 
@@ -64,7 +70,11 @@ var _ webhook.Validator = &Grafana{}
 func (r *Grafana) ValidateCreate() (admission.Warnings, error) {
 	grafanalog.Info("validate create", "name", r.Name)
 
-	// TODO(user): fill in your validation logic upon object creation.
+	for _, ds := range r.Spec.DataSources {
+		if ds.Type != "prometheus-incluster" && ds.Type != "loki-incluster" && ds.Type != "tempo-incluster" {
+			return admission.Warnings{"invalid datasource type"}, nil
+		}
+	}
 	return nil, nil
 }
 
@@ -72,7 +82,12 @@ func (r *Grafana) ValidateCreate() (admission.Warnings, error) {
 func (r *Grafana) ValidateUpdate(old runtime.Object) (admission.Warnings, error) {
 	grafanalog.Info("validate update", "name", r.Name)
 
-	// TODO(user): fill in your validation logic upon object update.
+	// validate datasources type
+	for _, ds := range r.Spec.DataSources {
+		if ds.Type != "prometheus-incluster" && ds.Type != "loki-incluster" && ds.Type != "tempo-incluster" {
+			return admission.Warnings{"invalid datasource type"}, nil
+		}
+	}
 	return nil, nil
 }
 

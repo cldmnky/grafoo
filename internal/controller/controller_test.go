@@ -23,6 +23,8 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	configv1 "github.com/openshift/api/config/v1"
+	corev1 "k8s.io/api/core/v1"
+	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -53,6 +55,11 @@ var _ = Describe("Grafana Controller", func() {
 						Name:      resourceName,
 						Namespace: "default",
 					},
+					Spec: grafoov1alpha1.GrafanaSpec{
+						Dex: &grafoov1alpha1.Dex{
+							Enabled: true,
+						},
+					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
@@ -67,6 +74,14 @@ var _ = Describe("Grafana Controller", func() {
 			}
 			Expect(k8sClient.Create(ctx, ingress)).To(Succeed())
 
+			By("creating a service account")
+			serviceAccount := &corev1.ServiceAccount{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      resourceName + "-sa",
+					Namespace: "default",
+				},
+			}
+			Expect(k8sClient.Create(ctx, serviceAccount)).To(Succeed())
 		})
 
 		AfterEach(func() {
@@ -83,12 +98,22 @@ var _ = Describe("Grafana Controller", func() {
 			err = k8sClient.Get(ctx, types.NamespacedName{Name: "cluster"}, ingress)
 			Expect(err).NotTo(HaveOccurred())
 			Expect(k8sClient.Delete(ctx, ingress)).To(Succeed())
+
+			By("Cleanup the specific resource instance service account")
+			serviceAccount := &corev1.ServiceAccount{}
+			err = k8sClient.Get(ctx, types.NamespacedName{
+				Name:      resourceName + "-sa",
+				Namespace: "default",
+			}, serviceAccount)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Delete(ctx, serviceAccount)).To(Succeed())
 		})
 		It("should successfully reconcile the resource", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &GrafanaReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:    k8sClient,
+				Scheme:    k8sClient.Scheme(),
+				Clientset: clientSet,
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -115,8 +140,9 @@ var _ = Describe("Grafana Controller", func() {
 			Expect(k8sClient.Update(ctx, grafana)).To(Succeed())
 
 			controllerReconciler := &GrafanaReconciler{
-				Client: k8sClient,
-				Scheme: k8sClient.Scheme(),
+				Client:    k8sClient,
+				Scheme:    k8sClient.Scheme(),
+				Clientset: clientSet,
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -131,6 +157,141 @@ var _ = Describe("Grafana Controller", func() {
 			// The grafana instance should have owner reference set to the custom resource
 			Expect(grafanaOperated.OwnerReferences).To(HaveLen(1))
 			Expect(grafanaOperated.OwnerReferences[0].Name).To(Equal(resourceName))
+		})
+		It("should successfully reconcile the resource with Dex disabled", func() {
+			By("Reconciling the created resource")
+			// get the resource
+			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
+			grafana.Spec.Dex = &grafoov1alpha1.Dex{
+				Enabled: false,
+			}
+			Expect(k8sClient.Update(ctx, grafana)).To(Succeed())
+
+			controllerReconciler := &GrafanaReconciler{
+				Client:    k8sClient,
+				Scheme:    k8sClient.Scheme(),
+				Clientset: clientSet,
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
+			// expect a grafana instance to be created
+			Expect(k8sClient.Get(ctx, typeNamespacedName, grafanaOperated)).To(Succeed())
+			// The Grafana instance should have the same name as the custom resource
+			Expect(grafanaOperated.Name).To(Equal(resourceName))
+			// The grafana instance should have owner reference set to the custom resource
+			Expect(grafanaOperated.OwnerReferences).To(HaveLen(1))
+			Expect(grafanaOperated.OwnerReferences[0].Name).To(Equal(resourceName))
+		})
+		// client secret
+		It("should successfully reconcile the resource with Dex enabled and client secret", func() {
+			By("Reconciling the created resource")
+			// get the resource
+			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
+			grafana.Spec.Dex = &grafoov1alpha1.Dex{
+				Enabled: true,
+			}
+			Expect(k8sClient.Update(ctx, grafana)).To(Succeed())
+
+			controllerReconciler := &GrafanaReconciler{
+				Client:    k8sClient,
+				Scheme:    k8sClient.Scheme(),
+				Clientset: clientSet,
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
+			// expect a grafana instance to be created
+			Expect(k8sClient.Get(ctx, typeNamespacedName, grafanaOperated)).To(Succeed())
+			// The Grafana instance should have the same name as the custom resource
+			Expect(grafanaOperated.Name).To(Equal(resourceName))
+			// The grafana instance should have owner reference set to the custom resource
+			Expect(grafanaOperated.OwnerReferences).To(HaveLen(1))
+			Expect(grafanaOperated.OwnerReferences[0].Name).To(Equal(resourceName))
+			By("Checking the client secret")
+			// check the client secret
+			clientSecret := &corev1.Secret{}
+			err = k8sClient.Get(ctx, types.NamespacedName{
+				Name:      grafanaOperated.Name + "-dex-client-secret",
+				Namespace: grafanaOperated.Namespace,
+			}, clientSecret)
+			Expect(err).NotTo(HaveOccurred())
+			clientSecretValue := clientSecret.Data["clientSecret"]
+			Expect(clientSecretValue).NotTo(BeNil())
+			Expect(clientSecretValue).NotTo(BeEmpty())
+			By("Reconciling the created resource again")
+			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			// Get the client secret again
+			err = k8sClient.Get(ctx, types.NamespacedName{
+				Name:      grafanaOperated.Name + "-dex-client-secret",
+				Namespace: grafanaOperated.Namespace,
+			}, clientSecret)
+			Expect(err).NotTo(HaveOccurred())
+			clientSecretValueAgain := clientSecret.Data["clientSecret"]
+			Expect(clientSecretValueAgain).NotTo(BeNil())
+			Expect(clientSecretValueAgain).NotTo(BeEmpty())
+			Expect(clientSecretValueAgain).To(Equal(clientSecretValue))
+
+			By("Checking that the dex config secret has the same client secret")
+			dexConfigSecret := &corev1.Secret{}
+			err = k8sClient.Get(ctx, types.NamespacedName{
+				Name:      grafanaOperated.Name + "-dex",
+				Namespace: grafanaOperated.Namespace,
+			}, dexConfigSecret)
+			Expect(err).NotTo(HaveOccurred())
+			config := dexConfigSecret.Data["config.yaml"]
+			Expect(config).NotTo(BeNil())
+			Expect(config).NotTo(BeEmpty())
+			Expect(string(config)).To(ContainSubstring(string(clientSecretValue)))
+		})
+		// Clusterrolebinding
+		It("should successfully create a cluster role binding for the grafana account", func() {
+			By("Reconciling the created resource")
+			// get the resource
+			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
+			Expect(k8sClient.Update(ctx, grafana)).To(Succeed())
+
+			controllerReconciler := &GrafanaReconciler{
+				Client:    k8sClient,
+				Scheme:    k8sClient.Scheme(),
+				Clientset: clientSet,
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
+			// expect a grafana instance to be created
+			Expect(k8sClient.Get(ctx, typeNamespacedName, grafanaOperated)).To(Succeed())
+			// The Grafana instance should have the same name as the custom resource
+			Expect(grafanaOperated.Name).To(Equal(resourceName))
+			// The grafana instance should have owner reference set to the custom resource
+			Expect(grafanaOperated.OwnerReferences).To(HaveLen(1))
+			Expect(grafanaOperated.OwnerReferences[0].Name).To(Equal(resourceName))
+			By("Checking the cluster role binding")
+			clusterRoleBinding := &rbacv1.ClusterRoleBinding{}
+			err = k8sClient.Get(ctx, types.NamespacedName{
+				Name: grafanaOperated.Name + "-cluster-monitoring-view",
+			}, clusterRoleBinding)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(clusterRoleBinding.Subjects).To(HaveLen(1))
+			Expect(clusterRoleBinding.Subjects[0].Name).To(Equal(grafanaOperated.Name + "-sa"))
+			Expect(clusterRoleBinding.Subjects[0].Kind).To(Equal("ServiceAccount"))
+			Expect(clusterRoleBinding.Subjects[0].Namespace).To(Equal(grafanaOperated.Namespace))
+			// The cluster role binding should have the correct role
+			Expect(clusterRoleBinding.RoleRef.Name).To(Equal("cluster-monitoring-view"))
+			Expect(clusterRoleBinding.RoleRef.Kind).To(Equal("ClusterRole"))
+			Expect(clusterRoleBinding.RoleRef.APIGroup).To(Equal("rbac.authorization.k8s.io"))
 		})
 	})
 })

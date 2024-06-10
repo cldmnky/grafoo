@@ -1,0 +1,52 @@
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: mutating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /mutate-grafoo-cloudmonkey-org-v1alpha1-grafana
+  failurePolicy: Fail
+  name: mgrafana.kb.io
+  rules:
+  - apiGroups:
+    - grafoo.cloudmonkey.org
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - grafanas
+  sideEffects: None
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: ValidatingWebhookConfiguration
+metadata:
+  name: validating-webhook-configuration
+webhooks:
+- admissionReviewVersions:
+  - v1
+  clientConfig:
+    service:
+      name: webhook-service
+      namespace: system
+      path: /validate-grafoo-cloudmonkey-org-v1alpha1-grafana
+  failurePolicy: Fail
+  name: vgrafana.kb.io
+  rules:
+  - apiGroups:
+    - grafoo.cloudmonkey.org
+    apiVersions:
+    - v1alpha1
+    operations:
+    - CREATE
+    - UPDATE
+    resources:
+    - grafanas
+  sideEffects: None

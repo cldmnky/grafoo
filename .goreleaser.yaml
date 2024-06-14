@@ -24,11 +24,13 @@ builds:
     goarch:
       - amd64
       - arm64
-    main: ./cmd/main.go
+    main: ./cmd/grafoo/main.go
+    binary: /opt/grafoo/grafoo
 
 kos:
-  - repository: quay.io/cldmnky/grafoo
-    main: ./cmd/...
+  - id: grafoo
+    repository: quay.io/cldmnky/grafoo
+    main: ./cmd/grafoo
     base_image: registry.access.redhat.com/ubi9/ubi:9.4
     tags:
     - '{{.Version}}'

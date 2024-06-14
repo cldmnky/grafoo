@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"time"
 
 	grafanav1beta1 "github.com/grafana/grafana-operator/v5/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
@@ -59,6 +60,7 @@ var _ = Describe("Grafana Controller", func() {
 						Dex: &grafoov1alpha1.Dex{
 							Enabled: true,
 						},
+						TokenDuration: metav1.Duration{Duration: time.Minute * 10},
 					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
@@ -292,6 +294,30 @@ var _ = Describe("Grafana Controller", func() {
 			Expect(clusterRoleBinding.RoleRef.Name).To(Equal("cluster-monitoring-view"))
 			Expect(clusterRoleBinding.RoleRef.Kind).To(Equal("ClusterRole"))
 			Expect(clusterRoleBinding.RoleRef.APIGroup).To(Equal("rbac.authorization.k8s.io"))
+		})
+		// status
+		It("should successfully update the status of the resource", func() {
+			By("Reconciling the created resource")
+			// get the resource
+			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
+			Expect(k8sClient.Update(ctx, grafana)).To(Succeed())
+
+			controllerReconciler := &GrafanaReconciler{
+				Client:    k8sClient,
+				Scheme:    k8sClient.Scheme(),
+				Clientset: clientSet,
+			}
+
+			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
+				NamespacedName: typeNamespacedName,
+			})
+			Expect(err).NotTo(HaveOccurred())
+			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
+			Expect(grafana.Status).NotTo(BeNil())
+			Expect(grafana.Status.TokenExpirationTime).NotTo(BeNil())
+			Expect(grafana.Status.TokenExpirationTime.Time).NotTo(BeNil())
+			Expect(grafana.Status.TokenExpirationTime.Time).NotTo(BeZero())
+
 		})
 	})
 })

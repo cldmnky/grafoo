@@ -1,8 +1,23 @@
 package v1alpha1
 
+import (
+	"time"
+
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+const (
+	// Phases
+	PhasePending   = "Pending"
+	PhaseRunning   = "Running"
+	PhaseSucceeded = "Succeeded"
+	PhaseFailed    = "Failed"
+)
+
 var (
 	DexImage        = "docker.io/dexidp/dex:v2.39.1-distroless"
 	GrafanaVersion  = "9.5.17"
+	TokenDuration   = metav1.Duration{Duration: 1440 * time.Minute}
 	GrafanaReplicas = int32(1)
 	DexHttpPort     = int32(5555)
 	DexGrpcPort     = int32(5556)

@@ -59,6 +59,10 @@ func (r *Grafana) Default() {
 	if len(r.Spec.DataSources) == 0 {
 		r.Spec.DataSources = DataSources
 	}
+	// tokenDuration
+	if r.Spec.TokenDuration.Duration == 0 {
+		r.Spec.TokenDuration = TokenDuration
+	}
 }
 
 // TODO(user): change verbs to "verbs=create;update;delete" if you want to enable deletion validation.

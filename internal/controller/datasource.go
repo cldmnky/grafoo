@@ -20,7 +20,7 @@ func (r *GrafanaReconciler) ReconcileDataSource(ctx context.Context, instance *g
 	request := &authenticationv1.TokenRequest{
 		Spec: authenticationv1.TokenRequestSpec{
 			Audiences:         nil,
-			ExpirationSeconds: int64Ptr(86400),
+			ExpirationSeconds: int64Ptr(int64(instance.Spec.TokenDuration.Duration.Seconds())),
 		},
 	}
 	resp, err := r.Clientset.CoreV1().ServiceAccounts(instance.Namespace).CreateToken(ctx, r.generateNameForComponent(instance, "sa"), request, metav1.CreateOptions{})

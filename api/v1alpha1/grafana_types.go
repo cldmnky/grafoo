@@ -25,11 +25,15 @@ import (
 
 // GrafanaSpec defines the desired state of Grafana
 type GrafanaSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
-
-	Version  string `json:"version,omitempty"`
+	// +kubebuilder:validation:Optional
+	Version string `json:"version,omitempty"`
+	// +kubebuilder:validation:Optional
 	Replicas *int32 `json:"replicas,omitempty"`
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Type=string
+	// +kubebuilder:validation:Pattern="^([0-9]+(\\.[0-9]+)?(s|m|h))+$"
+	// +kubebuilder:default="1440m0s"
+	TokenDuration metav1.Duration `json:"tokenDuration,omitempty"`
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Pattern=`^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$`
 	// IngressDomain is the domain to use for the Grafana Ingress, setting a domain will create an Ingress for Grafana and Dex as grafana.<IngressDomain> and dex.<IngressDomain>.
@@ -57,8 +61,10 @@ func (ds *DataSource) GetDataSourceNameHash() string {
 
 // GrafanaStatus defines the observed state of Grafana
 type GrafanaStatus struct {
-	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
-	// Important: Run "make" to regenerate code after modifying this file
+	// TokenExpirationTime is the time when the token will expire
+	// +optional
+	TokenExpirationTime *metav1.Time `json:"tokenExpirationTime,omitempty"`
+	Phase               string       `json:"phase,omitempty"`
 }
 
 //+kubebuilder:object:root=true

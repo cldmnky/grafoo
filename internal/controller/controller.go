@@ -80,6 +80,11 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if instance.Spec.Dex != nil && instance.Spec.Dex.Enabled {
 		if err := r.ReconcileDex(ctx, instance); err != nil {
 			logger.Error(err, "Failed to reconcile dex")
+			// Set the status to failed
+			instance.Status.Phase = grafoov1alpha1.PhaseFailed
+			if err := r.Status().Update(ctx, instance); err != nil {
+				logger.Error(err, "Failed to update status")
+			}
 			return ctrl.Result{}, err
 		}
 	}
@@ -151,6 +156,9 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		grafana.Spec = grafanaSpec
 		return ctrl.SetControllerReference(instance, grafana, r.Scheme)
 	})
+	if err != nil {
+		return ctrl.Result{}, err
+	}
 	// Create a clusterrolebinding for the grafana instance
 	metricsClusterRoleBinding := &rbacv1.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
@@ -254,10 +262,26 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// Create a datasource instance
 	if err := r.ReconcileDataSource(ctx, instance); err != nil {
 		logger.Error(err, "Failed to reconcile datasource")
+		// Set the status to failed
+		instance.Status.Phase = grafoov1alpha1.PhaseFailed
+		if err := r.Status().Update(ctx, instance); err != nil {
+			logger.Error(err, "Failed to update status")
+		}
 		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{Requeue: true, RequeueAfter: time.Second * 86400}, nil
+	// Update status
+	// now + tokenDuration
+	tokenExpirationTime := metav1.Time{Time: time.Now().Add(instance.Spec.TokenDuration.Duration)}
+	instance.Status.TokenExpirationTime = &tokenExpirationTime
+	// Phase
+	instance.Status.Phase = grafoov1alpha1.PhaseSucceeded
+	if err := r.Status().Update(ctx, instance); err != nil {
+		logger.Error(err, "Failed to update status")
+		return ctrl.Result{}, err
+	}
+
+	return ctrl.Result{Requeue: true, RequeueAfter: instance.Spec.TokenDuration.Duration}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

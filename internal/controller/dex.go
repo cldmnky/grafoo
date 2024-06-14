@@ -87,7 +87,7 @@ func (r *GrafanaReconciler) ReconcileDex(ctx context.Context, instance *grafoov1
 	request := &authenticationv1.TokenRequest{
 		Spec: authenticationv1.TokenRequestSpec{
 			Audiences:         nil,
-			ExpirationSeconds: int64Ptr(86400),
+			ExpirationSeconds: int64Ptr(int64(instance.Spec.TokenDuration.Duration.Seconds())),
 		},
 	}
 	resp, err := r.Clientset.CoreV1().ServiceAccounts(instance.Namespace).CreateToken(ctx, dexServiceAccount.Name, request, metav1.CreateOptions{})
@@ -95,6 +95,7 @@ func (r *GrafanaReconciler) ReconcileDex(ctx context.Context, instance *grafoov1
 		return err
 	}
 	logger.Info("Created token for dex service account", "token expiration", resp.Status.ExpirationTimestamp.Time)
+
 	saToken := resp.Status.Token
 	dexConfig := map[string]string{
 		"config.yaml": fmt.Sprintf(`

@@ -67,11 +67,22 @@ spec:
               replicas:
                 format: int32
                 type: integer
+              tokenDuration:
+                default: 1440m0s
+                pattern: ^([0-9]+(\.[0-9]+)?(s|m|h))+$
+                type: string
               version:
                 type: string
             type: object
           status:
             description: GrafanaStatus defines the observed state of Grafana
+            properties:
+              phase:
+                type: string
+              tokenExpirationTime:
+                description: TokenExpirationTime is the time when the token will expire
+                format: date-time
+                type: string
             type: object
         type: object
     served: true

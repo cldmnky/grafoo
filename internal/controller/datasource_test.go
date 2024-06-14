@@ -2,6 +2,7 @@ package controller
 
 import (
 	"context"
+	"time"
 
 	grafanav1beta1 "github.com/grafana/grafana-operator/v5/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
@@ -42,6 +43,7 @@ var _ = Describe("Datasource Controller", func() {
 						Dex: &grafoov1alpha1.Dex{
 							Enabled: true,
 						},
+						TokenDuration: metav1.Duration{Duration: time.Minute * 10},
 					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())

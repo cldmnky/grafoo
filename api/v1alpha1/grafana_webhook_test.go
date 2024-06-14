@@ -23,6 +23,7 @@ var _ = Describe("Grafana Webhook", func() {
 			Expect(*g.Spec.Replicas).To(Equal(GrafanaReplicas))
 			Expect(g.Spec.DataSources).ToNot(BeNil())
 			Expect(g.Spec.DataSources).To(Equal(DataSources))
+			Expect(g.Spec.TokenDuration).To(Equal(TokenDuration))
 
 		})
 	})

@@ -16,7 +16,10 @@ require (
 	sigs.k8s.io/controller-runtime v0.18.2
 )
 
-require github.com/openshift/api v3.9.0+incompatible
+require (
+	github.com/google/uuid v1.6.0
+	github.com/openshift/api v3.9.0+incompatible
+)
 
 require (
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
@@ -46,7 +49,6 @@ require (
 	github.com/google/go-cmp v0.6.0 // indirect
 	github.com/google/gofuzz v1.2.0 // indirect
 	github.com/google/pprof v0.0.0-20240424215950-a892ee059fd6 // indirect
-	github.com/google/uuid v1.6.0 // indirect
 	github.com/grafana/grafana-openapi-client-go v0.0.0-20240430202104-3ad0f7e4ee52 // indirect
 	github.com/imdario/mergo v0.3.13 // indirect
 	github.com/josharian/intern v1.0.0 // indirect

@@ -144,12 +144,15 @@ release: semver
 	git checkout main; \
 	git pull; \
 	VERSION=$$($(SEMVER) up $$TYPE); \
-	git checkout -b release/$$VERSION; \
 	git add .; \
 	git commit -m "Release $$VERSION"; \
+	git push; \
+	git checkout -b release/$$VERSION; \
 	git push --set-upstream origin release/$$VERSION; \
-	git tag -a $$VERSION -m "Release $$VERSION";
-	
+	git tag -a $$VERSION -m "Release $$VERSION"; \
+	git push origin --tags $$VERSION; \
+	git checkout main; \
+
 ##@ Build
 
 .PHONY: build

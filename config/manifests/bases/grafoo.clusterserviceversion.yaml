@@ -1,0 +1,48 @@
+apiVersion: operators.coreos.com/v1alpha1
+kind: ClusterServiceVersion
+metadata:
+  annotations:
+    alm-examples: '[]'
+    capabilities: Basic Install
+  name: grafoo.v0.0.0
+  namespace: placeholder
+spec:
+  apiservicedefinitions: {}
+  customresourcedefinitions:
+    owned:
+    - description: Grafana is the Schema for the grafanas API
+      displayName: Grafana
+      kind: Grafana
+      name: grafanas.grafoo.cloudmonkey.org
+      version: v1alpha1
+  description: grafoo deploys Grafana in OpenShift and manages datasources that connects
+    to the in-cluster monitoring and loki logging stack
+  displayName: Grafoo
+  icon:
+  - base64data: ""
+    mediatype: ""
+  install:
+    spec:
+      deployments: null
+    strategy: ""
+  installModes:
+  - supported: false
+    type: OwnNamespace
+  - supported: false
+    type: SingleNamespace
+  - supported: false
+    type: MultiNamespace
+  - supported: true
+    type: AllNamespaces
+  keywords:
+  - observability
+  links:
+  - name: Grafoo
+    url: https://grafoo.domain
+  maintainers:
+  - email: magnus@cloudmonkey.org
+    name: Magnus Bengtsson
+  maturity: alpha
+  provider:
+    name: grafoo
+  version: 0.0.0

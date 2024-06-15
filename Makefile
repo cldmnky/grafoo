@@ -139,8 +139,20 @@ lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 ## Release
 .PHONY: release
 release: semver
-	$(SEMVER) bump patch --version=$(VERSION)
-	$(MAKE) goreleaser
+	@TYPE=$$(gum choose "release" "rc" "beta" "alpha"); \
+	echo "Creating a new $$TYPE release"; \
+	git checkout main; \
+	git pull; \
+	VERSION=$$($(SEMVER) up $$TYPE); \
+	git add .; \
+	git commit -m "Release $$VERSION"; \
+	git push; \
+	git checkout -b release/$$VERSION; \
+	git push --set-upstream origin release/$$VERSION; \
+	git tag -a $$VERSION -m "Release $$VERSION"; \
+	git push origin --tags $$VERSION; \
+	git checkout main;
+
 ##@ Build
 
 .PHONY: build

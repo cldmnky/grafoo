@@ -35,8 +35,6 @@ import (
 	grafoov1alpha1 "github.com/cldmnky/grafoo/api/v1alpha1"
 )
 
-var ()
-
 // GrafanaReconciler reconciles a Grafana object
 type GrafanaReconciler struct {
 	client.Client

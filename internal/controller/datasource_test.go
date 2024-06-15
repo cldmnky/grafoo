@@ -115,10 +115,11 @@ var _ = Describe("Datasource Controller", func() {
 			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
 				NamespacedName: typeNamespacedName,
 			})
+			Expect(err).NotTo(HaveOccurred())
 
 			// Get the Grafana instance
 			err = k8sClient.Get(ctx, typeNamespacedName, grafana)
-			// Get ther ds hash name
+			// Get there ds hash name
 			dsHashName := grafana.Spec.DataSources[0].GetDataSourceNameHash()
 			Expect(err).NotTo(HaveOccurred())
 			By("Checking the created GrafanaDatasource")

@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
 	//+kubebuilder:scaffold:imports
 
 	grafanav1beta1 "github.com/grafana/grafana-operator/v5/api/v1beta1"

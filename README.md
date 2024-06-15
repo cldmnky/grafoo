@@ -1,4 +1,4 @@
-# grafoo
+![alt text](assets/grafoo.png)
 
 *Grafana for OpenShift Observability* - Configure Grafana for use in OpenShift!
 

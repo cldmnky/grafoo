@@ -136,6 +136,23 @@ lint: golangci-lint ## Run golangci-lint linter & yamllint
 lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 	$(GOLANGCI_LINT) run --fix
 
+## Release
+.PHONY: release
+release: semver
+	@TYPE=$$(gum choose "release" "rc" "beta" "alpha"); \
+	echo "Creating a new $$TYPE release"; \
+	git checkout main; \
+	git pull; \
+	VERSION=$$($(SEMVER) up $$TYPE); \
+	git add .; \
+	git commit -m "Release $$VERSION"; \
+	git push; \
+	git checkout -b release/$$VERSION; \
+	git push --set-upstream origin release/$$VERSION; \
+	git tag -a $$VERSION -m "Release $$VERSION"; \
+	git push origin --tags $$VERSION; \
+	git checkout main;
+
 ##@ Build
 
 .PHONY: build
@@ -196,10 +213,16 @@ CONTROLLER_GEN ?= $(LOCALBIN)/controller-gen
 ENVTEST ?= $(LOCALBIN)/setup-envtest
 KO ?= $(LOCALBIN)/ko
 GORELEASER ?= $(LOCALBIN)/goreleaser
+SEMVER ?= $(LOCALBIN)/semver
 
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.2.1
 CONTROLLER_TOOLS_VERSION ?= v0.14.0
+
+.PHONY: semver
+semver: $(SEMVER) ## Download semver locally if necessary.
+$(SEMVER): $(LOCALBIN)
+	test -s $(LOCALBIN)/semver || GOBIN=$(LOCALBIN) go install github.com/maykonlf/semver-cli/cmd/semver@latest
 
 .PHONY: goreleaser
 goreleaser: $(GORELEASER) ## Download goreleaser locally if necessary.

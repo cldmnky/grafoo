@@ -59,8 +59,8 @@ on:
         required: false
   workflow_dispatch:
 
-  # push:
-  #   branches: [ "main" ]
+  push:
+    branches: [ "main" ]
 
   # pull_request_target is used to securely share secret to the PR's workflow run.
   # For more info visit: https://docs.github.com/en/actions/using-workflows/events-that-trigger-workflows#pull_request_target

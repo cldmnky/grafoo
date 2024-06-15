@@ -147,8 +147,7 @@ run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./cmd/grafoo/main.go
 
 .PHONY: docker-build
-docker-build: ## Build docker image with the manager.
-	# $(CONTAINER_TOOL) build  --platform linux/amd64 -t ${IMG} .
+docker-build:  manifests generate fmt vet ko ## Build docker image with the manager.
 	KO_DOCKER_REPO=$(IMAGE_TAG_BASE) \
 	KO_DEFAULTBASEIMAGE=registry.access.redhat.com/ubi9/ubi:9.4 \
 	$(KO) build --platform linux/amd64,linux/arm64 \

@@ -136,6 +136,11 @@ lint: golangci-lint ## Run golangci-lint linter & yamllint
 lint-fix: golangci-lint ## Run golangci-lint linter and perform fixes
 	$(GOLANGCI_LINT) run --fix
 
+## Release
+.PHONY: release
+release: semver
+	$(SEMVER) bump patch --version=$(VERSION)
+	$(MAKE) goreleaser
 ##@ Build
 
 .PHONY: build

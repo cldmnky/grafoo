@@ -21,7 +21,7 @@ metadata:
         }
       ]
     capabilities: Basic Install
-    createdAt: "2024-06-15T19:33:25Z"
+    createdAt: "2024-06-15T20:39:29Z"
     operators.operatorframework.io/builder: operator-sdk-v1.34.2
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
   name: grafoo.v0.1.0
@@ -387,7 +387,7 @@ spec:
   - observability
   links:
   - name: Grafoo
-    url: https://grafoo.domain
+    url: https://github.com/cldmnky/grafoo
   maintainers:
   - email: magnus@cloudmonkey.org
     name: Magnus Bengtsson

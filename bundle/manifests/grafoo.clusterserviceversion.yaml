@@ -21,7 +21,7 @@ metadata:
         }
       ]
     capabilities: Basic Install
-    createdAt: "2024-06-16T10:17:50Z"
+    createdAt: "2024-06-16T10:23:52Z"
     operators.operatorframework.io/builder: operator-sdk-v1.34.2
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
   name: grafoo.v0.1.0
@@ -261,7 +261,7 @@ spec:
                 - --leader-elect
                 command:
                 - /ko-app/grafoo
-                image: quay.io/cldmnky/grafoo:latest
+                image: quay.io/cldmnky/grafoo:0.1.0-alpha.9
                 livenessProbe:
                   httpGet:
                     path: /healthz

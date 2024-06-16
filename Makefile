@@ -144,6 +144,7 @@ release: semver
 	git checkout main; \
 	git pull; \
 	VERSION=$$($(SEMVER) up $$TYPE); \
+	$(MAKE) bundle-build bundle-push; \
 	git add .; \
 	git commit -m "Release $$VERSION"; \
 	git push; \

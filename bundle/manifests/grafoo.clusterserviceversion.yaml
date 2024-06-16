@@ -21,7 +21,7 @@ metadata:
         }
       ]
     capabilities: Basic Install
-    createdAt: "2024-06-16T10:29:02Z"
+    createdAt: "2024-06-16T21:27:46Z"
     operators.operatorframework.io/builder: operator-sdk-v1.34.2
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
   name: grafoo.v0.1.0
@@ -52,6 +52,18 @@ spec:
           verbs:
           - get
           - list
+          - watch
+        - apiGroups:
+          - ""
+          resources:
+          - persistentvolumeclaims
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
           - watch
         - apiGroups:
           - ""
@@ -114,6 +126,18 @@ spec:
           - deployments/status
           verbs:
           - get
+        - apiGroups:
+          - authorization.k8s.io
+          resources:
+          - subjectaccessreviews
+          verbs:
+          - create
+        - apiGroups:
+          - authorization.k8s.io
+          resources:
+          - tokenreviews
+          verbs:
+          - create
         - apiGroups:
           - config.openshift.io
           resources:
@@ -230,6 +254,34 @@ spec:
           - patch
           - update
           - watch
+        - apiGroups:
+          - rbac.authorization.k8s.io
+          resources:
+          - clusterroles
+          verbs:
+          - create
+          - delete
+          - get
+          - list
+          - patch
+          - update
+          - watch
+        - apiGroups:
+          - tempo.grafana.com
+          resourceNames:
+          - traces
+          resources:
+          - dev
+          verbs:
+          - get
+        - apiGroups:
+          - tempo.grafana.com
+          resourceNames:
+          - traces
+          resources:
+          - prod
+          verbs:
+          - get
         serviceAccountName: grafoo-operator
       deployments:
       - label:
@@ -261,7 +313,7 @@ spec:
                 - --leader-elect
                 command:
                 - /ko-app/grafoo
-                image: quay.io/cldmnky/grafoo:latest
+                image: quay.io/cldmnky/grafoo:0.1.0
                 livenessProbe:
                   httpGet:
                     path: /healthz

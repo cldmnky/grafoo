@@ -88,9 +88,9 @@ func (r *GrafanaReconciler) ReconcileMariaDB(ctx context.Context, instance *graf
 			},
 		},
 	}
+	mariadbPVC.Spec = mariadbPVCSpec
 	op, err = CreateOrUpdateWithRetries(ctx, r.Client, mariadbPVC, func() error {
 		mariadbPVC.Labels = r.generateLabelsForComponent(instance, "mariadb")
-		mariadbPVC.Spec = mariadbPVCSpec
 		return ctrl.SetControllerReference(instance, mariadbPVC, r.Scheme)
 	})
 	if err != nil {

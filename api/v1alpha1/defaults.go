@@ -18,7 +18,7 @@ var (
 	DexImage           = "docker.io/dexidp/dex:v2.39.1-distroless"
 	GrafanaVersion     = "9.5.17"
 	TokenDuration      = metav1.Duration{Duration: 1440 * time.Minute}
-	GrafanaReplicas    = int32(1)
+	GrafanaReplicas    = int32(2)
 	DexHttpPort        = int32(5555)
 	DexGrpcPort        = int32(5556)
 	DexMetricsPort     = int32(5557)

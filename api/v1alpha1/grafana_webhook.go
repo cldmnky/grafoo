@@ -59,6 +59,7 @@ func (r *Grafana) Default() {
 		r.Spec.MariaDB = &MariaDB{
 			Enabled:     true,
 			StorageSize: MariaDBStorageSize,
+			Image:       MariaDBImage,
 		}
 	}
 	// replicas

@@ -149,7 +149,7 @@ release: semver
 	git commit -m "Release $$VERSION"; \
 	git push; \
 	git checkout -b release/$$VERSION; \
-	VERSION=$$SEMVER $(MAKE) bundle bundle-build bundle-push; \
+	IMG=$(IMAGE_TAG_BASE):$$SEMVER $(MAKE) bundle bundle-build bundle-push; \
 	git add .; \
 	git commit -m "Bundle $$VERSION"; \
 	git push --set-upstream origin release/$$VERSION; \

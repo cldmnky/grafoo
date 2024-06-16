@@ -36,30 +36,45 @@ spec: {}
 apiVersion: grafoo.cloudmonkey.org/v1alpha1
 kind: Grafana
 metadata:
-  name: grafana
+  name: grafana-sample
   namespace: grafoo-system
 spec:
   datasources:
   - enabled: true
     name: Prometheus
+    prometheus:
+      url: https://thanos-querier.openshift-monitoring.svc.cluster.local:9091
     type: prometheus-incluster
-    url: https://thanos-querier.openshift-monitoring.svc.cluster.local:9091
   - enabled: true
+    loki:
+      url: https://logging-loki-gateway-http.openshift-logging.svc.cluster.local:8080/api/logs/v1/application/
     name: Loki (Application)
     type: loki-incluster
-    url: https://logging-loki-gateway-http.openshift-logging.svc.cluster.local:8080/api/logs/v1/application/
   - enabled: true
+    loki:
+      url: https://logging-loki-gateway-http.openshift-logging.svc.cluster.local:8080/api/logs/v1/infrastructure/
     name: Loki (Infrastructure)
     type: loki-incluster
-    url: https://logging-loki-gateway-http.openshift-logging.svc.cluster.local:8080/api/logs/v1/infrastructure/
   - enabled: true
+    loki:
+      url: https://logging-loki-gateway-http.openshift-logging.svc.cluster.local:8080/api/logs/v1/audit/
     name: Loki (Audit)
     type: loki-incluster
-    url: https://logging-loki-gateway-http.openshift-logging.svc.cluster.local:8080/api/logs/v1/audit/
+  - enabled: true
+    name: Tempo (Dev)
+    tempo:
+      url: https://tempo-tempo-gateway.openshift-tempo-operator.svc.cluster.local:8080/api/traces/v1/dev/tempo
+    type: tempo-incluster
+  - enabled: true
+    name: Tempo (Prod)
+    tempo:
+      url: https://tempo-tempo-gateway.openshift-tempo-operator.svc.cluster.local:8080/api/traces/v1/prod/tempo
+    type: tempo-incluster
   dex:
     enabled: true
     image: docker.io/dexidp/dex:v2.39.1-distroless
   replicas: 1
+  tokenDuration: 24h0m0s
   version: 9.5.17
 ```
 

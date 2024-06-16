@@ -44,15 +44,42 @@ spec:
                   properties:
                     enabled:
                       type: boolean
+                    loki:
+                      properties:
+                        lokiStack:
+                          properties:
+                            name:
+                              type: string
+                            namespace:
+                              type: string
+                          type: object
+                        url:
+                          type: string
+                      type: object
                     name:
                       type: string
+                    prometheus:
+                      properties:
+                        url:
+                          type: string
+                      type: object
+                    tempo:
+                      properties:
+                        tempoStack:
+                          properties:
+                            name:
+                              type: string
+                            namespace:
+                              type: string
+                          type: object
+                        url:
+                          type: string
+                      type: object
                     type:
                       enum:
                       - prometheus-incluster
                       - loki-incluster
                       - tempo-incluster
-                      type: string
-                    url:
                       type: string
                   type: object
                 type: array

@@ -36,16 +36,94 @@ var _ = Describe("Grafana Webhook", func() {
 						{
 							Name:    "prometheus",
 							Type:    "foo-type",
-							URL:     "http://prometheus.openshift-monitoring.svc.cluster.local:9090",
 							Enabled: true,
 						},
 					},
 				},
 			}
 			warn, err := g.ValidateCreate()
-			Expect(err).To(BeNil())
-			Expect(warn).ToNot(BeNil())
+			Expect(err).NotTo(BeNil())
+			Expect(warn).To(BeNil())
 
+		})
+
+		It("Should deny if a data source type does not have a struct", func() {
+			g := &Grafana{
+				Spec: GrafanaSpec{
+					DataSources: []DataSource{
+						{
+							Name:    "foo-name",
+							Type:    "prometheus-incluster",
+							Enabled: true,
+						},
+					},
+				},
+			}
+			warn, err := g.ValidateCreate()
+			Expect(err).NotTo(BeNil())
+			Expect(warn).To(BeNil())
+
+		})
+
+		It("Should deny if a data source type does not have a correct struct", func() {
+			g := &Grafana{
+				Spec: GrafanaSpec{
+					DataSources: []DataSource{
+						{
+							Name:    "foo-name",
+							Type:    "prometheus-incluster",
+							Enabled: true,
+							Loki: &LokiDS{
+								URL: "http://prometheus.monitoring.svc",
+							},
+						},
+					},
+				},
+			}
+			warn, err := g.ValidateCreate()
+			Expect(err).NotTo(BeNil())
+			Expect(warn).To(BeNil())
+		})
+
+		It("Should deny if a data source type have extra structs", func() {
+			g := &Grafana{
+				Spec: GrafanaSpec{
+					DataSources: []DataSource{
+						{
+							Name:    "foo-name",
+							Type:    "prometheus-incluster",
+							Enabled: true,
+							Prometheus: &PrometheusDS{
+								URL: "http://prometheus.monitoring.svc",
+							},
+							Loki: &LokiDS{
+								URL: "http://loki.monitoring.svc",
+							},
+						},
+					},
+				},
+			}
+			warn, err := g.ValidateCreate()
+			Expect(err).NotTo(BeNil())
+			Expect(warn).To(BeNil())
+		})
+
+		It("Should deny if a data source type have missing required fields", func() {
+			g := &Grafana{
+				Spec: GrafanaSpec{
+					DataSources: []DataSource{
+						{
+							Name:       "foo-name",
+							Type:       "prometheus-incluster",
+							Enabled:    true,
+							Prometheus: &PrometheusDS{},
+						},
+					},
+				},
+			}
+			warn, err := g.ValidateCreate()
+			Expect(err).NotTo(BeNil())
+			Expect(warn).To(BeNil())
 		})
 
 		It("Should admit if all required fields are provided", func() {

@@ -99,8 +99,10 @@ var _ = Describe("Datasource Controller", func() {
 				{
 					Name:    "Prometheus",
 					Type:    "prometheus-incluster",
-					URL:     "http://prometheus.openshift-monitoring.svc.cluster.local:9090",
 					Enabled: true,
+					Prometheus: &grafoov1alpha1.PrometheusDS{
+						URL: "http://prometheus.default.svc.cluster.local",
+					},
 				},
 			}
 			Expect(k8sClient.Update(ctx, grafana)).To(Succeed())
@@ -110,6 +112,7 @@ var _ = Describe("Datasource Controller", func() {
 				Client:    k8sClient,
 				Scheme:    k8sClient.Scheme(),
 				Clientset: clientSet,
+				Dynamic:   dynamicClient,
 			}
 
 			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{

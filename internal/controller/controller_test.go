@@ -116,6 +116,7 @@ var _ = Describe("Grafana Controller", func() {
 				Client:    k8sClient,
 				Scheme:    k8sClient.Scheme(),
 				Clientset: clientSet,
+				Dynamic:   dynamicClient,
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -145,6 +146,7 @@ var _ = Describe("Grafana Controller", func() {
 				Client:    k8sClient,
 				Scheme:    k8sClient.Scheme(),
 				Clientset: clientSet,
+				Dynamic:   dynamicClient,
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -173,6 +175,7 @@ var _ = Describe("Grafana Controller", func() {
 				Client:    k8sClient,
 				Scheme:    k8sClient.Scheme(),
 				Clientset: clientSet,
+				Dynamic:   dynamicClient,
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -202,6 +205,7 @@ var _ = Describe("Grafana Controller", func() {
 				Client:    k8sClient,
 				Scheme:    k8sClient.Scheme(),
 				Clientset: clientSet,
+				Dynamic:   dynamicClient,
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -266,6 +270,7 @@ var _ = Describe("Grafana Controller", func() {
 				Client:    k8sClient,
 				Scheme:    k8sClient.Scheme(),
 				Clientset: clientSet,
+				Dynamic:   dynamicClient,
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
@@ -306,6 +311,7 @@ var _ = Describe("Grafana Controller", func() {
 				Client:    k8sClient,
 				Scheme:    k8sClient.Scheme(),
 				Clientset: clientSet,
+				Dynamic:   dynamicClient,
 			}
 
 			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{

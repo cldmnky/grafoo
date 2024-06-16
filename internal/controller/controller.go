@@ -24,9 +24,11 @@ import (
 	grafanav1beta1 "github.com/grafana/grafana-operator/v5/api/v1beta1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -40,6 +42,7 @@ type GrafanaReconciler struct {
 	client.Client
 	Scheme    *runtime.Scheme
 	Clientset *kubernetes.Clientset
+	Dynamic   *dynamic.DynamicClient
 }
 
 // +kubebuilder:rbac:groups="",resources=namespaces,verbs=get;list;watch
@@ -61,6 +64,11 @@ type GrafanaReconciler struct {
 // +kubebuilder:rbac:groups=monitoring.coreos.com,resources=prometheuses/api,resourceNames=k8s,verbs=get;create;update
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
+// +kubebuilder:rbac:groups=authorization.k8s.io,resources=tokenreviews,verbs=create
+// +kubebuilder:rbac:groups=tempo.grafana.com,resources=dev,resourceNames=traces,verbs=get
+// +kubebuilder:rbac:groups=tempo.grafana.com,resources=prod,resourceNames=traces,verbs=get
 
 func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
@@ -157,7 +165,106 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if err != nil {
 		return ctrl.Result{}, err
 	}
-	// Create a clusterrolebinding for the grafana instance
+	// Create a clusterrole for the grafana service account that allows subjectaccessreviews
+	grafanaClusterRole := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: r.generateNameForComponent(instance, "auth-reviewer"),
+		},
+	}
+	grafanaClusterRoleRules := []rbacv1.PolicyRule{
+		{
+			APIGroups: []string{"authorization.k8s.io"},
+			Resources: []string{"subjectaccessreviews"},
+			Verbs:     []string{"create"},
+		},
+		{
+			APIGroups: []string{"authorization.k8s.io"},
+			Resources: []string{"tokenreviews"},
+			Verbs:     []string{"create"},
+		},
+	}
+	_, err = CreateOrUpdateWithRetries(ctx, r.Client, grafanaClusterRole, func() error {
+		grafanaClusterRole.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
+		grafanaClusterRole.Rules = grafanaClusterRoleRules
+		return nil
+	})
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	// Create a clusterrolebinging for the auth-reviewer clusterrole
+	grafanaClusterRoleBinding := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: r.generateNameForComponent(instance, "auth-reviewer"),
+		},
+	}
+	_, err = CreateOrUpdateWithRetries(ctx, r.Client, grafanaClusterRoleBinding, func() error {
+		grafanaClusterRoleBinding.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
+		grafanaClusterRoleBinding.Subjects = []rbacv1.Subject{
+			{
+				Kind:      "ServiceAccount",
+				Name:      r.generateNameForComponent(instance, "sa"),
+				Namespace: instance.Namespace,
+			},
+		}
+		grafanaClusterRoleBinding.RoleRef = rbacv1.RoleRef{
+			Kind:     "ClusterRole",
+			Name:     r.generateNameForComponent(instance, "auth-reviewer"),
+			APIGroup: "rbac.authorization.k8s.io",
+		}
+		return nil
+	})
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	// Create a clusterrole for the grafana service account that allows tempostack reads
+	grafanaTempoClusterRole := &rbacv1.ClusterRole{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: r.generateNameForComponent(instance, "tempostack-traces-reader"),
+		},
+	}
+	grafanaTempoClusterRoleRules := []rbacv1.PolicyRule{
+		{
+			APIGroups:     []string{"tempo.grafana.com"},
+			Resources:     []string{"dev"},
+			ResourceNames: []string{"traces"},
+			Verbs:         []string{"get"},
+		},
+	}
+	_, err = CreateOrUpdateWithRetries(ctx, r.Client, grafanaTempoClusterRole, func() error {
+		grafanaTempoClusterRole.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
+		grafanaTempoClusterRole.Rules = grafanaTempoClusterRoleRules
+		return nil
+	})
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+	// Create a clusterrolebinging for the tempostack-traces-reader clusterrole
+	grafanaTempoClusterRoleBinding := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: r.generateNameForComponent(instance, "tempostack-traces-reader"),
+		},
+	}
+	_, err = CreateOrUpdateWithRetries(ctx, r.Client, grafanaTempoClusterRoleBinding, func() error {
+		grafanaTempoClusterRoleBinding.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
+		grafanaTempoClusterRoleBinding.Subjects = []rbacv1.Subject{
+			{
+				Kind:      "ServiceAccount",
+				Name:      r.generateNameForComponent(instance, "sa"),
+				Namespace: instance.Namespace,
+			},
+		}
+		grafanaTempoClusterRoleBinding.RoleRef = rbacv1.RoleRef{
+			Kind:     "ClusterRole",
+			Name:     r.generateNameForComponent(instance, "tempostack-traces-reader"),
+			APIGroup: "rbac.authorization.k8s.io",
+		}
+		return nil
+	})
+	if err != nil {
+		return ctrl.Result{}, err
+	}
+
+	// Create a clusterrolebinding for the grafana service account
 	metricsClusterRoleBinding := &rbacv1.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: r.generateNameForComponent(instance, "cluster-monitoring-view"),
@@ -291,5 +398,8 @@ func (r *GrafanaReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&appsv1.Deployment{}).
 		Owns(&corev1.Secret{}).
 		Owns(&corev1.ServiceAccount{}).
+		Owns(&corev1.Service{}).
+		Owns(&rbacv1.ClusterRoleBinding{}).
+		Owns(&networkingv1.Ingress{}).
 		Complete(r)
 }

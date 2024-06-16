@@ -74,6 +74,18 @@ rules:
   verbs:
   - get
 - apiGroups:
+  - authorization.k8s.io
+  resources:
+  - subjectaccessreviews
+  verbs:
+  - create
+- apiGroups:
+  - authorization.k8s.io
+  resources:
+  - tokenreviews
+  verbs:
+  - create
+- apiGroups:
   - config.openshift.io
   resources:
   - ingresses
@@ -189,3 +201,31 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - rbac.authorization.k8s.io
+  resources:
+  - clusterroles
+  verbs:
+  - create
+  - delete
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - tempo.grafana.com
+  resourceNames:
+  - traces
+  resources:
+  - dev
+  verbs:
+  - get
+- apiGroups:
+  - tempo.grafana.com
+  resourceNames:
+  - traces
+  resources:
+  - prod
+  verbs:
+  - get

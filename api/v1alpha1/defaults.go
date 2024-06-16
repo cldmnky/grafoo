@@ -60,7 +60,7 @@ var (
 			Type:    "tempo-incluster",
 			Enabled: true,
 			Tempo: &TempoDS{
-				URL: "http://tempo-tempo-gateway.openshift-tempo-operator.svc.cluster.local:8080/api/traces/v1/dev/tempo",
+				URL: "https://tempo-tempo-gateway.openshift-tempo-operator.svc.cluster.local:8080/api/traces/v1/dev/tempo",
 			},
 		},
 		{
@@ -68,7 +68,7 @@ var (
 			Type:    "tempo-incluster",
 			Enabled: true,
 			Tempo: &TempoDS{
-				URL: "http://tempo-tempo-gateway.openshift-tempo-operator.svc.cluster.local:8080/api/traces/v1/prod/tempo",
+				URL: "https://tempo-tempo-gateway.openshift-tempo-operator.svc.cluster.local:8080/api/traces/v1/prod/tempo",
 			},
 		},
 	}

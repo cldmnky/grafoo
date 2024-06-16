@@ -144,11 +144,12 @@ release: semver
 	git checkout main; \
 	git pull; \
 	VERSION=$$($(SEMVER) up $$TYPE); \
+	SEMVER=$$(echo $$VERSION | cut -d'v' -f2); \
 	git add .; \
 	git commit -m "Release $$VERSION"; \
 	git push; \
 	git checkout -b release/$$VERSION; \
-	VERSION=$$VERSION $(MAKE) bundle bundle-build bundle-push; \
+	VERSION=$$SEMVER $(MAKE) bundle bundle-build bundle-push; \
 	git add .; \
 	git commit -m "Bundle $$VERSION"; \
 	git push --set-upstream origin release/$$VERSION; \

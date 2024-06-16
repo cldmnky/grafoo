@@ -28,6 +28,17 @@ func (r *GrafanaReconciler) ReconcileDataSource(ctx context.Context, instance *g
 		return err
 	}
 	logger.Info("Created token for datasources", "token expiration", resp.Status.ExpirationTimestamp.Time)
+	/*gvr := schema.GroupVersionResource{
+		Group:    "loki.grafana.com",
+		Version:  "v1",
+		Resource: "lokistacks",
+	}
+	l, err := r.Dynamic.Resource(gvr).Namespace("default").List(context.Background(), v1.ListOptions{})
+	if err != nil {
+		return err
+	}
+	logger.Info("Loki stacks", "loki", l)
+	*/
 
 	for _, ds := range instance.Spec.DataSources {
 		switch ds.Type {
@@ -42,32 +53,14 @@ func (r *GrafanaReconciler) ReconcileDataSource(ctx context.Context, instance *g
 				return err
 			}
 		case "tempo-incluster":
-			//err = r.reconcileTempoDataSource(ctx, instance)
-			//if err != nil {
-			//	return err
-			//}
+			err = r.reconcileTempoDataSource(ctx, instance, ds, resp)
+			if err != nil {
+				return err
+			}
 		default:
 			logger.Info("Unknown datasource type", "type", ds.Type)
 		}
 	}
-	/*
-		// Loki datasource
-		lokiDataSource := &grafanav1beta1.GrafanaDatasource{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      r.generateNameForComponent(instance, "loki"),
-				Namespace: instance.Namespace,
-			},
-		}
-		lokiDataSourceSpec := grafanav1beta1.GrafanaDatasourceSpec{
-			Datasource: &grafanav1beta1.GrafanaDatasourceInternal{
-				Name:           "Loki Application",
-				Type:           "loki",
-				Access:         "proxy",
-				IsDefault:      boolPtr(false),
-				URL:            "https://loki.openshift-logging.svc.cluster.local:9095",
-			},
-		}
-	*/
 
 	return nil
 }
@@ -86,7 +79,7 @@ func (r *GrafanaReconciler) reconcilePrometheusDataSource(ctx context.Context, i
 			Type:           "prometheus",
 			Access:         "proxy",
 			IsDefault:      boolPtr(true),
-			URL:            ds.URL,
+			URL:            ds.Prometheus.URL,
 			JSONData:       json.RawMessage(`{"httpHeaderName1": "Authorization", "tlsSkipVerify": true}`),
 			SecureJSONData: json.RawMessage(`{"httpHeaderValue1": "Bearer ` + resp.Status.Token + `"}`),
 		},
@@ -124,7 +117,7 @@ func (r *GrafanaReconciler) reconcileLokiDataSource(ctx context.Context, instanc
 			Type:           "loki",
 			Access:         "proxy",
 			IsDefault:      boolPtr(false),
-			URL:            ds.URL,
+			URL:            ds.Loki.URL,
 			JSONData:       json.RawMessage(`{"httpHeaderName1": "Authorization", "tlsSkipVerify": true}`),
 			SecureJSONData: json.RawMessage(`{"httpHeaderValue1": "Bearer ` + resp.Status.Token + `"}`),
 		},
@@ -144,6 +137,45 @@ func (r *GrafanaReconciler) reconcileLokiDataSource(ctx context.Context, instanc
 		logger.Info("Created Loki datasource")
 	} else if op == ctrlutil.OperationResultUpdated {
 		logger.Info("Updated Loki datasource")
+	}
+	return nil
+}
+
+// reconcileTempoDataSource
+func (r *GrafanaReconciler) reconcileTempoDataSource(ctx context.Context, instance *grafoov1alpha1.Grafana, ds grafoov1alpha1.DataSource, resp *authenticationv1.TokenRequest) error {
+	logger := log.FromContext(ctx)
+	tempoDataSource := &grafanav1beta1.GrafanaDatasource{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      r.generateNameForComponent(instance, ds.GetDataSourceNameHash()),
+			Namespace: instance.Namespace,
+		},
+	}
+	tempoDataSourceSpec := grafanav1beta1.GrafanaDatasourceSpec{
+		Datasource: &grafanav1beta1.GrafanaDatasourceInternal{
+			Name:           ds.Name,
+			Type:           "tempo",
+			Access:         "proxy",
+			IsDefault:      boolPtr(false),
+			URL:            ds.Tempo.URL,
+			JSONData:       json.RawMessage(`{"httpHeaderName1": "Authorization", "tlsSkipVerify": true}`),
+			SecureJSONData: json.RawMessage(`{"httpHeaderValue1": "Bearer ` + resp.Status.Token + `"}`),
+		},
+		InstanceSelector: &metav1.LabelSelector{
+			MatchLabels: r.generateLabelsForComponent(instance, "grafana"),
+		},
+	}
+	op, err := CreateOrUpdateWithRetries(ctx, r.Client, tempoDataSource, func() error {
+		tempoDataSource.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "tempo")
+		tempoDataSource.Spec = tempoDataSourceSpec
+		return ctrl.SetControllerReference(instance, tempoDataSource, r.Scheme)
+	})
+	if err != nil {
+		return err
+	}
+	if op == ctrlutil.OperationResultCreated {
+		logger.Info("Created Tempo datasource")
+	} else if op == ctrlutil.OperationResultUpdated {
+		logger.Info("Updated Tempo datasource")
 	}
 	return nil
 }

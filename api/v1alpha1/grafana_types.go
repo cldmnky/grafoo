@@ -47,12 +47,52 @@ type Dex struct {
 	Image   string `json:"image,omitempty"`
 }
 type DataSource struct {
+	// +kubebuilder:validation:Required
+	Name string `json:"name,omitempty"`
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Enum=prometheus-incluster;loki-incluster;tempo-incluster
+	Type string `json:"type,omitempty"`
+	// +kubebuilder:validation:Required
+	Enabled bool `json:"enabled,omitempty"`
+	// +kubebuilder:validation:Optional
+	Loki *LokiDS `json:"loki,omitempty"`
+	// +kubebuilder:validation:Optional
+	Tempo *TempoDS `json:"tempo,omitempty"`
+	// +kubebuilder:validation:Optional
+	Prometheus *PrometheusDS `json:"prometheus,omitempty"`
+}
+
+type LokiDS struct {
+	// +kubebuilder:validation:Optional
+	URL string `json:"url,omitempty"`
+	// +kubebuilder:validation:Optional
+	LokiStack *LokiStack `json:"lokiStack,omitempty"`
+}
+
+type LokiStack struct {
 	// +kubebuilder:validation:Optional
 	Name string `json:"name,omitempty"`
-	// +kubebuilder:validation:Enum=prometheus-incluster;loki-incluster;tempo-incluster
-	Type    string `json:"type,omitempty"`
-	URL     string `json:"url,omitempty"`
-	Enabled bool   `json:"enabled,omitempty"`
+	// +kubebuilder:validation:Optional
+	Namespace string `json:"namespace,omitempty"`
+}
+
+type TempoDS struct {
+	// +kubebuilder:validation:Optional
+	URL string `json:"url,omitempty"`
+	// +kubebuilder:validation:Optional
+	TempoStack *TempoStack `json:"tempoStack,omitempty"`
+}
+
+type TempoStack struct {
+	// +kubebuilder:validation:Optional
+	Name string `json:"name,omitempty"`
+	// +kubebuilder:validation:Optional
+	Namespace string `json:"namespace,omitempty"`
+}
+
+type PrometheusDS struct {
+	// +kubebuilder:validation:Required
+	URL string `json:"url,omitempty"`
 }
 
 func (ds *DataSource) GetDataSourceNameHash() string {

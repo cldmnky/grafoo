@@ -20,13 +20,13 @@ import (
 	"crypto/tls"
 	"flag"
 	"os"
-
 	//+kubebuilder:scaffold:imports
 
 	grafanav1beta1 "github.com/grafana/grafana-operator/v5/api/v1beta1"
 	configv1 "github.com/openshift/api/config/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	_ "k8s.io/client-go/plugin/pkg/client/auth"
@@ -148,10 +148,17 @@ func main() {
 		os.Exit(1)
 	}
 
+	dynamic, err := dynamic.NewForConfig(ctrl.GetConfigOrDie())
+	if err != nil {
+		setupLog.Error(err, "unable to create dynamic client")
+		os.Exit(1)
+	}
+
 	if err = (&controller.GrafanaReconciler{
 		Client:    mgr.GetClient(),
 		Scheme:    mgr.GetScheme(),
 		Clientset: clientset,
+		Dynamic:   dynamic,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Grafana")
 		os.Exit(1)

@@ -26,26 +26,50 @@ var (
 		{
 			Name:    "Prometheus",
 			Type:    "prometheus-incluster",
-			URL:     "https://thanos-querier.openshift-monitoring.svc.cluster.local:9091",
 			Enabled: true,
+			Prometheus: &PrometheusDS{
+				URL: "https://thanos-querier.openshift-monitoring.svc.cluster.local:9091",
+			},
 		},
 		{
 			Name:    "Loki (Application)",
 			Type:    "loki-incluster",
-			URL:     "https://logging-loki-gateway-http.openshift-logging.svc.cluster.local:8080/api/logs/v1/application/",
 			Enabled: true,
+			Loki: &LokiDS{
+				URL: "https://logging-loki-gateway-http.openshift-logging.svc.cluster.local:8080/api/logs/v1/application/",
+			},
 		},
 		{
 			Name:    "Loki (Infrastructure)",
 			Type:    "loki-incluster",
-			URL:     "https://logging-loki-gateway-http.openshift-logging.svc.cluster.local:8080/api/logs/v1/infrastructure/",
 			Enabled: true,
+			Loki: &LokiDS{
+				URL: "https://logging-loki-gateway-http.openshift-logging.svc.cluster.local:8080/api/logs/v1/infrastructure/",
+			},
 		},
 		{
 			Name:    "Loki (Audit)",
 			Type:    "loki-incluster",
-			URL:     "https://logging-loki-gateway-http.openshift-logging.svc.cluster.local:8080/api/logs/v1/audit/",
 			Enabled: true,
+			Loki: &LokiDS{
+				URL: "https://logging-loki-gateway-http.openshift-logging.svc.cluster.local:8080/api/logs/v1/audit/",
+			},
+		},
+		{
+			Name:    "Tempo (Dev)",
+			Type:    "tempo-incluster",
+			Enabled: true,
+			Tempo: &TempoDS{
+				URL: "http://tempo-tempo-gateway.openshift-tempo-operator.svc.cluster.local:8080/api/traces/v1/dev/tempo",
+			},
+		},
+		{
+			Name:    "Tempo (Prod)",
+			Type:    "tempo-incluster",
+			Enabled: true,
+			Tempo: &TempoDS{
+				URL: "http://tempo-tempo-gateway.openshift-tempo-operator.svc.cluster.local:8080/api/traces/v1/prod/tempo",
+			},
 		},
 	}
 )

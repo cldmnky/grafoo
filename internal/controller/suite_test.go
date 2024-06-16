@@ -28,6 +28,7 @@ import (
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	configv1 "github.com/openshift/api/config/v1"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
@@ -46,6 +47,7 @@ var cfg *rest.Config
 var k8sClient client.Client
 var testEnv *envtest.Environment
 var clientSet *kubernetes.Clientset
+var dynamicClient *dynamic.DynamicClient
 
 func TestControllers(t *testing.T) {
 	RegisterFailHandler(Fail)
@@ -94,6 +96,10 @@ var _ = BeforeSuite(func() {
 	clientSet, err = kubernetes.NewForConfig(cfg)
 	Expect(err).NotTo(HaveOccurred())
 	Expect(clientSet).NotTo(BeNil())
+
+	dynamicClient, err = dynamic.NewForConfig(cfg)
+	Expect(err).NotTo(HaveOccurred())
+	Expect(dynamicClient).NotTo(BeNil())
 
 })
 

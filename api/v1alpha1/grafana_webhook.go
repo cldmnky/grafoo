@@ -17,7 +17,10 @@ limitations under the License.
 package v1alpha1
 
 import (
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/util/validation/field"
 	ctrl "sigs.k8s.io/controller-runtime"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
@@ -73,13 +76,75 @@ var _ webhook.Validator = &Grafana{}
 // ValidateCreate implements webhook.Validator so a webhook will be registered for the type
 func (r *Grafana) ValidateCreate() (admission.Warnings, error) {
 	grafanalog.Info("validate create", "name", r.Name)
+	return nil, r.validateGrafana()
+}
 
+func (r *Grafana) validateGrafana() error {
+	var allErrs field.ErrorList
+	if err := r.validateGrafanaDatasources(); err != nil {
+		allErrs = append(allErrs, err)
+	}
+	if len(allErrs) == 0 {
+		return nil
+	}
+	return apierrors.NewInvalid(
+		schema.GroupKind{
+			Group: "grafoo.cloudmonkey.org", Kind: "Grafana",
+		}, r.Name, allErrs)
+}
+
+// validateGrafanaDatasources validates the datasources
+func (r *Grafana) validateGrafanaDatasources() *field.Error {
 	for _, ds := range r.Spec.DataSources {
 		if ds.Type != "prometheus-incluster" && ds.Type != "loki-incluster" && ds.Type != "tempo-incluster" {
-			return admission.Warnings{"invalid datasource type"}, nil
+			return field.Invalid(field.NewPath("spec").Child("dataSources"), ds.Type, "invalid datasource type")
 		}
 	}
-	return nil, nil
+	for _, ds := range r.Spec.DataSources {
+		if ds.Type == "prometheus-incluster" {
+			if ds.Prometheus == nil {
+				return field.Invalid(field.NewPath("spec").Child("dataSources"), ds.Type, "missing prometheus config")
+			}
+			if ds.Prometheus.URL == "" {
+				return field.Invalid(field.NewPath("spec").Child("dataSources"), ds.Type, "missing prometheus url")
+			}
+			if ds.Loki != nil {
+				return field.Invalid(field.NewPath("spec").Child("dataSources"), ds.Type, "loki config is not allowed")
+			}
+			if ds.Tempo != nil {
+				return field.Invalid(field.NewPath("spec").Child("dataSources"), ds.Type, "tempo config is not allowed")
+			}
+		}
+		if ds.Type == "loki-incluster" {
+			if ds.Loki == nil {
+				return field.Invalid(field.NewPath("spec").Child("dataSources"), ds.Type, "missing loki config")
+			}
+			if ds.Loki.URL == "" {
+				return field.Invalid(field.NewPath("spec").Child("dataSources"), ds.Type, "missing loki url")
+			}
+			if ds.Prometheus != nil {
+				return field.Invalid(field.NewPath("spec").Child("dataSources"), ds.Type, "prometheus config is not allowed")
+			}
+			if ds.Tempo != nil {
+				return field.Invalid(field.NewPath("spec").Child("dataSources"), ds.Type, "tempo config is not allowed")
+			}
+		}
+		if ds.Type == "tempo-incluster" {
+			if ds.Tempo == nil {
+				return field.Invalid(field.NewPath("spec").Child("dataSources"), ds.Type, "missing tempo config")
+			}
+			if ds.Tempo.URL == "" {
+				return field.Invalid(field.NewPath("spec").Child("dataSources"), ds.Type, "missing tempo url")
+			}
+			if ds.Prometheus != nil {
+				return field.Invalid(field.NewPath("spec").Child("dataSources"), ds.Type, "prometheus config is not allowed")
+			}
+			if ds.Loki != nil {
+				return field.Invalid(field.NewPath("spec").Child("dataSources"), ds.Type, "loki config is not allowed")
+			}
+		}
+	}
+	return nil
 }
 
 // ValidateUpdate implements webhook.Validator so a webhook will be registered for the type

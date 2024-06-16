@@ -51,7 +51,7 @@ endif
 OPERATOR_SDK_VERSION ?= v1.34.2
 
 # Image URL to use all building/pushing image targets
-IMG ?= $(IMAGE_TAG_BASE):latest
+IMG ?= $(IMAGE_TAG_BASE):$(VERSION)
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
 ENVTEST_K8S_VERSION = 1.28.3
 
@@ -148,7 +148,7 @@ release: semver
 	git commit -m "Release $$VERSION"; \
 	git push; \
 	git checkout -b release/$$VERSION; \
-	$(MAKE) bundle-build bundle-push; \
+	VERSION=$$(VERSION) $(MAKE) bundle-build bundle-push; \
 	git add .; \
 	git commit -m "Bundle $$VERSION"; \
 	git push --set-upstream origin release/$$VERSION; \

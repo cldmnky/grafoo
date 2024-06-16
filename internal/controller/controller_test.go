@@ -60,6 +60,11 @@ var _ = Describe("Grafana Controller", func() {
 						Dex: &grafoov1alpha1.Dex{
 							Enabled: true,
 						},
+						MariaDB: &grafoov1alpha1.MariaDB{
+							Enabled:     true,
+							StorageSize: "1Gi",
+							Image:       grafoov1alpha1.MariaDBImage,
+						},
 						TokenDuration: metav1.Duration{Duration: time.Minute * 10},
 					},
 				}

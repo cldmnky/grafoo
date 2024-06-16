@@ -18,6 +18,7 @@ package controller
 
 import (
 	"context"
+	"fmt"
 	"net/url"
 	"time"
 
@@ -50,6 +51,7 @@ type GrafanaReconciler struct {
 // +kubebuilder:rbac:groups="",resources=serviceaccounts,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=serviceaccounts/token,verbs=get;create
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=deployments/status,verbs=get
 // +kubebuilder:rbac:groups=config.openshift.io,resources=ingresses,verbs=get;list;watch
@@ -95,6 +97,19 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 	}
 
+	// Reconcile MariaDB
+	if instance.Spec.MariaDB != nil && instance.Spec.MariaDB.Enabled {
+		if err := r.ReconcileMariaDB(ctx, instance); err != nil {
+			logger.Error(err, "Failed to reconcile mariadb")
+			// Set the status to failed
+			instance.Status.Phase = grafoov1alpha1.PhaseFailed
+			if err := r.Status().Update(ctx, instance); err != nil {
+				logger.Error(err, "Failed to update status")
+			}
+			return ctrl.Result{}, err
+		}
+	}
+
 	// Create a mariadb instance
 
 	// Create a Grafana instance
@@ -117,6 +132,23 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 	grafanaRouteDomain := u.Hostname()
+	var databaseConfig map[string]string
+	if instance.Spec.MariaDB.Enabled {
+		// Get the mariadb secret
+		mariadbSecret := &corev1.Secret{}
+		if err := r.Get(ctx, client.ObjectKey{Name: r.generateNameForComponent(instance, "mariadb"), Namespace: instance.Namespace}, mariadbSecret); err != nil {
+			return ctrl.Result{}, err
+		}
+		mariaDBUrl := fmt.Sprintf("mysql://%s:%s@%s:3306/%s", string(mariadbSecret.Data["database-user"]), string(mariadbSecret.Data["database-password"]), r.generateNameForComponent(instance, "mariadb"), string(mariadbSecret.Data["database-name"]))
+		databaseConfig = map[string]string{
+			"type": "mysql",
+			"url":  mariaDBUrl,
+		}
+	} else {
+		databaseConfig = map[string]string{
+			"type": "sqlite3",
+		}
+	}
 
 	grafanaSpec := grafanav1beta1.GrafanaSpec{
 		Version: instance.Spec.Version,
@@ -154,6 +186,7 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				"tls_skip_verify_insecure": "true",
 				"role_attribute_path":      "contains(groups[*], 'system:cluster-admins') && 'Admin' || contains(groups[*], 'system:authenticated') && 'Editor' || 'Viewer'",
 			},
+			"database": databaseConfig,
 		},
 	}
 

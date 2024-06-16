@@ -37,9 +37,21 @@ type GrafanaSpec struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Pattern=`^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$`
 	// IngressDomain is the domain to use for the Grafana Ingress, setting a domain will create an Ingress for Grafana and Dex as grafana.<IngressDomain> and dex.<IngressDomain>.
-	IngressDomain string       `json:"domain,omitempty"`
-	Dex           *Dex         `json:"dex,omitempty"`
-	DataSources   []DataSource `json:"datasources,omitempty"`
+	IngressDomain string `json:"domain,omitempty"`
+	// +kubebuilder:validation:Optional
+	Dex *Dex `json:"dex,omitempty"`
+	// +kubebuilder:validation:Optional
+	MariaDB     *MariaDB     `json:"mariadb,omitempty"`
+	DataSources []DataSource `json:"datasources,omitempty"`
+}
+
+type MariaDB struct {
+	// +kubebuilder:validation:Optional
+	Enabled bool `json:"enabled,omitempty"`
+	// +kubebuilder:validation:Optional
+	StorageSize string `json:"storageSize,omitempty"`
+	// +kubebuilder:validation:Optional
+	Image string `json:"image,omitempty"`
 }
 
 type Dex struct {

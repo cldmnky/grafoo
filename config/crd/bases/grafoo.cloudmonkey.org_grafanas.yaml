@@ -96,6 +96,15 @@ spec:
                   and dex.<IngressDomain>.
                 pattern: ^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$
                 type: string
+              mariadb:
+                properties:
+                  enabled:
+                    type: boolean
+                  image:
+                    type: string
+                  storageSize:
+                    type: string
+                type: object
               replicas:
                 format: int32
                 type: integer

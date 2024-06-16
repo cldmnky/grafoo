@@ -47,6 +47,14 @@ func int64Ptr(val int64) *int64 {
 	return &val
 }
 
+func stringPtr(val string) *string {
+	return &val
+}
+
+func int32Ptr(val int32) *int32 {
+	return &val
+}
+
 // generateNameForComponent generates a name for the Grafana instance components
 func (r *GrafanaReconciler) generateNameForComponent(instance *grafoov1alpha1.Grafana, component string) string {
 	return fmt.Sprintf("%s-%s", instance.Name, component)

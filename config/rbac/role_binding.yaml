@@ -8,12 +8,12 @@ metadata:
     app.kubernetes.io/created-by: grafoo
     app.kubernetes.io/part-of: grafoo
     app.kubernetes.io/managed-by: kustomize
-  name: manager-rolebinding
+  name: operator
 roleRef:
   apiGroup: rbac.authorization.k8s.io
   kind: ClusterRole
-  name: manager-role
+  name: operator
 subjects:
 - kind: ServiceAccount
-  name: controller-manager
+  name: operator
   namespace: system

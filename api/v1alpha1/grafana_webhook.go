@@ -54,6 +54,13 @@ func (r *Grafana) Default() {
 			Image:   DexImage,
 		}
 	}
+	// mariadb
+	if r.Spec.MariaDB == nil {
+		r.Spec.MariaDB = &MariaDB{
+			Enabled:     true,
+			StorageSize: MariaDBStorageSize,
+		}
+	}
 	// replicas
 	if r.Spec.Replicas == nil {
 		r.Spec.Replicas = &GrafanaReplicas

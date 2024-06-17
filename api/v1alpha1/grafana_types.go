@@ -27,7 +27,10 @@ import (
 type GrafanaSpec struct {
 	// +kubebuilder:validation:Optional
 	Version string `json:"version,omitempty"`
-	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Required
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=10
+	// +kubebuilder:default=2
 	Replicas *int32 `json:"replicas,omitempty"`
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string

@@ -106,7 +106,10 @@ spec:
                     type: string
                 type: object
               replicas:
+                default: 2
                 format: int32
+                maximum: 10
+                minimum: 1
                 type: integer
               tokenDuration:
                 default: 1440m0s

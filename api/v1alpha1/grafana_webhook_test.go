@@ -15,7 +15,6 @@ var _ = Describe("Grafana Webhook", func() {
 				},
 			}
 			g.Default()
-			Expect(g.Spec.Version).To(Equal(GrafanaVersion))
 			Expect(g.Spec.Dex).ToNot(BeNil())
 			Expect(g.Spec.Dex.Enabled).To(BeTrue())
 			Expect(g.Spec.Dex.Image).To(Equal(DexImage))
@@ -23,8 +22,6 @@ var _ = Describe("Grafana Webhook", func() {
 			Expect(*g.Spec.Replicas).To(Equal(GrafanaReplicas))
 			Expect(g.Spec.DataSources).ToNot(BeNil())
 			Expect(g.Spec.DataSources).To(Equal(DataSources))
-			Expect(g.Spec.TokenDuration).To(Equal(TokenDuration))
-
 		})
 	})
 

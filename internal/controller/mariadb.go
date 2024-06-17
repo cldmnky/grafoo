@@ -21,6 +21,56 @@ import (
 func (r *GrafanaReconciler) ReconcileMariaDB(ctx context.Context, instance *grafoov1alpha1.Grafana) error {
 	logger := log.FromContext(ctx)
 	logger.Info("Reconciling MariaDB")
+	if !instance.Spec.MariaDB.Enabled {
+		logger.Info("MariaDB is disabled")
+		// Clean up MariaDB resources
+		// Delete MariaDB deployment
+		mariaDBDeployment := &appsv1.Deployment{}
+		if err := r.Client.Get(ctx, client.ObjectKey{Name: r.generateNameForComponent(instance, "mariadb"), Namespace: instance.Namespace}, mariaDBDeployment); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return err
+			}
+		} else {
+			if err := r.Client.Delete(ctx, mariaDBDeployment); err != nil {
+				return err
+			}
+		}
+		// Delete MariaDB service
+		mariaDBService := &corev1.Service{}
+		if err := r.Client.Get(ctx, client.ObjectKey{Name: r.generateNameForComponent(instance, "mariadb"), Namespace: instance.Namespace}, mariaDBService); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return err
+			}
+		} else {
+			if err := r.Client.Delete(ctx, mariaDBService); err != nil {
+				return err
+			}
+		}
+		// Delete MariaDB PVC
+		mariaDBPVC := &corev1.PersistentVolumeClaim{}
+		if err := r.Client.Get(ctx, client.ObjectKey{Name: r.generateNameForComponent(instance, "mariadb"), Namespace: instance.Namespace}, mariaDBPVC); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return err
+			}
+		} else {
+			if err := r.Client.Delete(ctx, mariaDBPVC); err != nil {
+				return err
+			}
+		}
+		// Delete MariaDB secret
+		mariaDBSecret := &corev1.Secret{}
+		if err := r.Client.Get(ctx, client.ObjectKey{Name: r.generateNameForComponent(instance, "mariadb"), Namespace: instance.Namespace}, mariaDBSecret); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return err
+			}
+		} else {
+			if err := r.Client.Delete(ctx, mariaDBSecret); err != nil {
+				return err
+			}
+		}
+
+		return nil
+	}
 	// Create a secret for MariaDB once
 	mariadbSecret := &corev1.Secret{}
 	if err := r.Client.Get(ctx, client.ObjectKey{Name: r.generateNameForComponent(instance, "mariadb"), Namespace: instance.Namespace}, mariadbSecret); err != nil {

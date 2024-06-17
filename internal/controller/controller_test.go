@@ -18,7 +18,6 @@ package controller
 
 import (
 	"context"
-	"time"
 
 	grafanav1beta1 "github.com/grafana/grafana-operator/v5/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
@@ -65,7 +64,6 @@ var _ = Describe("Grafana Controller", func() {
 							StorageSize: "1Gi",
 							Image:       grafoov1alpha1.MariaDBImage,
 						},
-						TokenDuration: metav1.Duration{Duration: time.Minute * 10},
 					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
@@ -136,6 +134,13 @@ var _ = Describe("Grafana Controller", func() {
 			// The grafana instance should have owner reference set to the custom resource
 			Expect(grafanaOperated.OwnerReferences).To(HaveLen(1))
 			Expect(grafanaOperated.OwnerReferences[0].Name).To(Equal(resourceName))
+			By("Checking the defaults")
+			// check the defaults
+			// Version
+			Expect(grafana.Spec.Version).To(Equal(grafoov1alpha1.GrafanaVersion))
+			Expect(grafanaOperated.Spec.Version).To(Equal(grafoov1alpha1.GrafanaVersion))
+			// Token duration
+			Expect(grafana.Spec.TokenDuration.Duration).To(Equal(grafoov1alpha1.TokenDuration.Duration))
 		})
 		// Dex is enabled
 		It("should successfully reconcile the resource with Dex enabled", func() {

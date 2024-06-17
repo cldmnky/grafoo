@@ -45,9 +45,9 @@ var _ webhook.Defaulter = &Grafana{}
 // Default implements webhook.Defaulter so a webhook will be registered for the type
 func (r *Grafana) Default() {
 	grafanalog.Info("default", "name", r.Name)
-	if r.Spec.Version == "" {
-		r.Spec.Version = GrafanaVersion
-	}
+	//if r.Spec.Version == "" {
+	//	r.Spec.Version = GrafanaVersion
+	//}
 	if r.Spec.Dex == nil {
 		r.Spec.Dex = &Dex{
 			Enabled: true,
@@ -69,10 +69,6 @@ func (r *Grafana) Default() {
 	// datasources
 	if len(r.Spec.DataSources) == 0 {
 		r.Spec.DataSources = DataSources
-	}
-	// tokenDuration
-	if r.Spec.TokenDuration.Duration == 0 {
-		r.Spec.TokenDuration = TokenDuration
 	}
 }
 

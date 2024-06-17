@@ -46,7 +46,7 @@ var _ = Describe("MariaDB Controller", func() {
 						StorageSize: "1Gi",
 						Image:       grafoov1alpha1.MariaDBImage,
 					},
-					TokenDuration: metav1.Duration{Duration: time.Minute * 10},
+					TokenDuration: &metav1.Duration{Duration: time.Minute * 1440},
 				},
 			}
 			Expect(k8sClient.Create(ctx, resource)).To(Succeed())
@@ -93,15 +93,16 @@ var _ = Describe("MariaDB Controller", func() {
 		Expect(k8sClient.Delete(ctx, serviceAccount)).To(Succeed())
 	})
 	Context("When reconciling a Grafana with MariaDB disabled", func() {
-		BeforeEach(func() {
+		It("Should not create a MariaDB deployment", func() {
 			By("Disabling MariaDB")
 			// get the resource
 			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
-
 			grafana.Spec.MariaDB.Enabled = false
 			Expect(k8sClient.Update(ctx, grafana)).To(Succeed())
-		})
-		It("Should not create a MariaDB secret", func() {
+			// Get the resource again
+			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
+			Expect(grafana.Spec.MariaDB.Enabled).To(BeFalse())
+
 			By("Reconciling the created resource")
 			controllerReconciler := &GrafanaReconciler{
 				Client:    k8sClient,
@@ -112,15 +113,23 @@ var _ = Describe("MariaDB Controller", func() {
 			_, err := controllerReconciler.Reconcile(ctx, ctrl.Request{NamespacedName: typeNamespacedName})
 			Expect(err).NotTo(HaveOccurred())
 
-			By("Checking if the MariaDB secret exists")
-			mariadbSecret := &corev1.Secret{}
-			err = k8sClient.Get(ctx, types.NamespacedName{Name: "test-grafana-mariadb", Namespace: "default"}, mariadbSecret)
+			By("Checking if the MariaDB deployment exists")
+			mariadbDeployment := &appsv1.Deployment{}
+			err = k8sClient.Get(ctx, types.NamespacedName{Name: "test-grafana-mariadb", Namespace: "default"}, mariadbDeployment)
 			Expect(err).To(HaveOccurred())
 			Expect(errors.IsNotFound(err)).To(BeTrue())
 		})
 	})
 
 	Context("When reconciling a Grafana with MariaDB enabled", func() {
+		BeforeEach(func() {
+			By("Enabling MariaDB")
+			// get the resource
+			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
+
+			grafana.Spec.MariaDB.Enabled = true
+			Expect(k8sClient.Update(ctx, grafana)).To(Succeed())
+		})
 		It("Should create a MariaDB secret once", func() {
 			By("Reconciling the created resource")
 			controllerReconciler := &GrafanaReconciler{

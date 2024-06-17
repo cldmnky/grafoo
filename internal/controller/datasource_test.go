@@ -48,7 +48,7 @@ var _ = Describe("Datasource Controller", func() {
 							StorageSize: "1Gi",
 							Image:       grafoov1alpha1.MariaDBImage,
 						},
-						TokenDuration: metav1.Duration{Duration: time.Minute * 10},
+						TokenDuration: &metav1.Duration{Duration: time.Minute * 1440},
 					},
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())

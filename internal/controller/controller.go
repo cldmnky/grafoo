@@ -98,16 +98,15 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 
 	// Reconcile MariaDB
-	if instance.Spec.MariaDB != nil && instance.Spec.MariaDB.Enabled {
-		if err := r.ReconcileMariaDB(ctx, instance); err != nil {
-			logger.Error(err, "Failed to reconcile mariadb")
-			// Set the status to failed
-			instance.Status.Phase = grafoov1alpha1.PhaseFailed
-			if err := r.Status().Update(ctx, instance); err != nil {
-				logger.Error(err, "Failed to update status")
-			}
-			return ctrl.Result{}, err
+
+	if err := r.ReconcileMariaDB(ctx, instance); err != nil {
+		logger.Error(err, "Failed to reconcile mariadb")
+		// Set the status to failed
+		instance.Status.Phase = grafoov1alpha1.PhaseFailed
+		if err := r.Status().Update(ctx, instance); err != nil {
+			logger.Error(err, "Failed to update status")
 		}
+		return ctrl.Result{}, err
 	}
 
 	// Create a mariadb instance

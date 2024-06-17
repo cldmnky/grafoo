@@ -25,59 +25,83 @@ import (
 
 // GrafanaSpec defines the desired state of Grafana
 type GrafanaSpec struct {
+	// Version is the version of Grafana to deploy
 	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:Pattern="^([0-9]+(\\.[0-9]+){0,2})$"
+	// +kubebuilder:default="9.5.17"
 	Version string `json:"version,omitempty"`
+	// Replicas is the number of replicas for the Grafana deployment
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Minimum=1
 	// +kubebuilder:validation:Maximum=10
 	// +kubebuilder:default=2
 	Replicas *int32 `json:"replicas,omitempty"`
+	// TokenDuration is the duration of the token used for authentication
+	// The token is used to authenticate for Dex and for the DataSources
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Type=string
-	// +kubebuilder:validation:Pattern="^([0-9]+(\\.[0-9]+)?(s|m|h))+$"
-	// +kubebuilder:default="1440m0s"
-	TokenDuration metav1.Duration `json:"tokenDuration,omitempty"`
+	// +kubebuilder:validation:Pattern="^([0-9]+(\\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$"
+	// +kubebuilder:default="1440m"
+	TokenDuration *metav1.Duration `json:"tokenDuration,omitempty"`
+	// IngressDomain is the domain to use for the Grafana Ingress, setting a domain will create an Ingress for Grafana and Dex as grafana.<IngressDomain> and dex.<IngressDomain>.
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Pattern=`^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$`
-	// IngressDomain is the domain to use for the Grafana Ingress, setting a domain will create an Ingress for Grafana and Dex as grafana.<IngressDomain> and dex.<IngressDomain>.
 	IngressDomain string `json:"domain,omitempty"`
+	// Dex is the configuration for the Dex OIDC provider
 	// +kubebuilder:validation:Optional
 	Dex *Dex `json:"dex,omitempty"`
+	// MariaDB is the configuration for the MariaDB database
 	// +kubebuilder:validation:Optional
-	MariaDB     *MariaDB     `json:"mariadb,omitempty"`
+	MariaDB *MariaDB `json:"mariadb,omitempty"`
+	// DataSources is the configuration for the DataSources
+	// +kubebuilder:validation:Optional
 	DataSources []DataSource `json:"datasources,omitempty"`
 }
 
 type MariaDB struct {
-	// +kubebuilder:validation:Optional
+	// Enabled is a flag to enable or disable the MariaDB database
+	// +kubebuilder:validation:Required
 	Enabled bool `json:"enabled,omitempty"`
+	// StorageSize is the size of the storage for the MariaDB database
 	// +kubebuilder:validation:Optional
 	StorageSize string `json:"storageSize,omitempty"`
+	// Image is the image to use for the MariaDB database
 	// +kubebuilder:validation:Optional
 	Image string `json:"image,omitempty"`
 }
 
 type Dex struct {
-	Enabled bool   `json:"enabled,omitempty"`
-	Image   string `json:"image,omitempty"`
+	// Enabled is a flag to enable or disable the Dex OIDC provider
+	// +kubebuilder:validation:Required
+	Enabled bool `json:"enabled,omitempty"`
+	// Image is the image to use for the Dex OIDC provider
+	// +kubebuilder:validation:Optional
+	Image string `json:"image,omitempty"`
 }
 type DataSource struct {
+	// Name is the name of the DataSource
 	// +kubebuilder:validation:Required
 	Name string `json:"name,omitempty"`
+	// Type is the type of the DataSource
 	// +kubebuilder:validation:Required
 	// +kubebuilder:validation:Enum=prometheus-incluster;loki-incluster;tempo-incluster
 	Type string `json:"type,omitempty"`
+	// Enabled is a flag to enable or disable the DataSource
 	// +kubebuilder:validation:Required
 	Enabled bool `json:"enabled,omitempty"`
+	// Loki is the configuration for the Loki DataSource
 	// +kubebuilder:validation:Optional
 	Loki *LokiDS `json:"loki,omitempty"`
+	// Tempo is the configuration for the Tempo DataSource
 	// +kubebuilder:validation:Optional
 	Tempo *TempoDS `json:"tempo,omitempty"`
+	// Prometheus is the configuration for the Prometheus DataSource
 	// +kubebuilder:validation:Optional
 	Prometheus *PrometheusDS `json:"prometheus,omitempty"`
 }
 
 type LokiDS struct {
+	// URL is the URL for the Loki DataSource
 	// +kubebuilder:validation:Optional
 	URL string `json:"url,omitempty"`
 	// +kubebuilder:validation:Optional
@@ -85,27 +109,34 @@ type LokiDS struct {
 }
 
 type LokiStack struct {
+	// Name is the name of the Loki Stack
 	// +kubebuilder:validation:Optional
 	Name string `json:"name,omitempty"`
+	// Namespace is the namespace of the Loki Stack
 	// +kubebuilder:validation:Optional
 	Namespace string `json:"namespace,omitempty"`
 }
 
 type TempoDS struct {
+	// URL is the URL for the Tempo DataSource
 	// +kubebuilder:validation:Optional
 	URL string `json:"url,omitempty"`
+	// TempoStack is the configuration for the Tempo Stack
 	// +kubebuilder:validation:Optional
 	TempoStack *TempoStack `json:"tempoStack,omitempty"`
 }
 
 type TempoStack struct {
+	// Name is the name of the Tempo Stack
 	// +kubebuilder:validation:Optional
 	Name string `json:"name,omitempty"`
+	// Namespace is the namespace of the Tempo Stack
 	// +kubebuilder:validation:Optional
 	Namespace string `json:"namespace,omitempty"`
 }
 
 type PrometheusDS struct {
+	// URL is the URL for the Prometheus DataSource
 	// +kubebuilder:validation:Required
 	URL string `json:"url,omitempty"`
 }

@@ -218,10 +218,16 @@ ENVTEST ?= $(LOCALBIN)/setup-envtest
 KO ?= $(LOCALBIN)/ko
 GORELEASER ?= $(LOCALBIN)/goreleaser
 SEMVER ?= $(LOCALBIN)/semver
+CRDOC ?= $(LOCALBIN)/crd-ref-docs
 
 ## Tool Versions
 KUSTOMIZE_VERSION ?= v5.2.1
 CONTROLLER_TOOLS_VERSION ?= v0.14.0
+
+.PHONY: crdoc
+crdoc: $(CRDOC) ## Download crdoc locally if necessary.
+$(CRDOC): $(LOCALBIN)
+	test -s $(LOCALBIN)/crd-ref-docs || GOBIN=$(LOCALBIN) go install github.com/elastic/crd-ref-docs@latest
 
 .PHONY: semver
 semver: $(SEMVER) ## Download semver locally if necessary.
@@ -330,3 +336,8 @@ catalog-build: opm ## Build a catalog image.
 .PHONY: catalog-push
 catalog-push: ## Push a catalog image.
 	$(MAKE) docker-push IMG=$(CATALOG_IMG)
+
+##@ Docs
+.PHONY: docs
+docs: crdoc ## Generate documentation for the CRDs.
+	$(CRDOC) --source-path api --renderer=markdown --output-path=docs/api.md --config=.crd-ref-docs.yaml

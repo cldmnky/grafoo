@@ -40,42 +40,61 @@ spec:
             description: GrafanaSpec defines the desired state of Grafana
             properties:
               datasources:
+                description: DataSources is the configuration for the DataSources
                 items:
                   properties:
                     enabled:
+                      description: Enabled is a flag to enable or disable the DataSource
                       type: boolean
                     loki:
+                      description: Loki is the configuration for the Loki DataSource
                       properties:
                         lokiStack:
                           properties:
                             name:
+                              description: Name is the name of the Loki Stack
                               type: string
                             namespace:
+                              description: Namespace is the namespace of the Loki
+                                Stack
                               type: string
                           type: object
                         url:
+                          description: URL is the URL for the Loki DataSource
                           type: string
                       type: object
                     name:
+                      description: Name is the name of the DataSource
                       type: string
                     prometheus:
+                      description: Prometheus is the configuration for the Prometheus
+                        DataSource
                       properties:
                         url:
+                          description: URL is the URL for the Prometheus DataSource
                           type: string
                       type: object
                     tempo:
+                      description: Tempo is the configuration for the Tempo DataSource
                       properties:
                         tempoStack:
+                          description: TempoStack is the configuration for the Tempo
+                            Stack
                           properties:
                             name:
+                              description: Name is the name of the Tempo Stack
                               type: string
                             namespace:
+                              description: Namespace is the namespace of the Tempo
+                                Stack
                               type: string
                           type: object
                         url:
+                          description: URL is the URL for the Tempo DataSource
                           type: string
                       type: object
                     type:
+                      description: Type is the type of the DataSource
                       enum:
                       - prometheus-incluster
                       - loki-incluster
@@ -84,10 +103,14 @@ spec:
                   type: object
                 type: array
               dex:
+                description: Dex is the configuration for the Dex OIDC provider
                 properties:
                   enabled:
+                    description: Enabled is a flag to enable or disable the Dex OIDC
+                      provider
                     type: boolean
                   image:
+                    description: Image is the image to use for the Dex OIDC provider
                     type: string
                 type: object
               domain:
@@ -97,25 +120,38 @@ spec:
                 pattern: ^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$
                 type: string
               mariadb:
+                description: MariaDB is the configuration for the MariaDB database
                 properties:
                   enabled:
+                    description: Enabled is a flag to enable or disable the MariaDB
+                      database
                     type: boolean
                   image:
+                    description: Image is the image to use for the MariaDB database
                     type: string
                   storageSize:
+                    description: StorageSize is the size of the storage for the MariaDB
+                      database
                     type: string
                 type: object
               replicas:
                 default: 2
+                description: Replicas is the number of replicas for the Grafana deployment
                 format: int32
                 maximum: 10
                 minimum: 1
                 type: integer
               tokenDuration:
-                default: 1440m0s
-                pattern: ^([0-9]+(\.[0-9]+)?(s|m|h))+$
+                default: 1440m
+                description: |-
+                  TokenDuration is the duration of the token used for authentication
+                  The token is used to authenticate for Dex and for the DataSources
+                pattern: ^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$
                 type: string
               version:
+                default: 9.5.17
+                description: Version is the version of Grafana to deploy
+                pattern: ^([0-9]+(\.[0-9]+){0,2})$
                 type: string
             type: object
           status:

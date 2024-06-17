@@ -21,6 +21,7 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 )
 
@@ -136,7 +137,11 @@ func (in *GrafanaSpec) DeepCopyInto(out *GrafanaSpec) {
 		*out = new(int32)
 		**out = **in
 	}
-	out.TokenDuration = in.TokenDuration
+	if in.TokenDuration != nil {
+		in, out := &in.TokenDuration, &out.TokenDuration
+		*out = new(v1.Duration)
+		**out = **in
+	}
 	if in.Dex != nil {
 		in, out := &in.Dex, &out.Dex
 		*out = new(Dex)

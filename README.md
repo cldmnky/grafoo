@@ -12,7 +12,7 @@
 
 `grafoo` is available in a custom operator catalog (TBA).
 
-It may also be deployed by cloning this repo, creating a `grafoo-system` project and then `make deploy IMG=quay.io/cldmnky/grafoo:latest`.
+It may also be deployed by cloning this repo, creating a `grafoo-system` project and then `make install && make deploy`.
 
 To deploy a grafoo managed grafana after the prerequisites and the `grafoo`operator has been deployed, simply apply a *CRD* that looks like:
 

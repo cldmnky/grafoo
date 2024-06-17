@@ -73,9 +73,16 @@ spec:
   dex:
     enabled: true
     image: docker.io/dexidp/dex:v2.39.1-distroless
-  replicas: 1
+  mariadb:
+    enabled: true
+    image: registry.access.redhat.com/rhel9/mariadb-1011:1-12
+    storageSize: 5Gi
+  replicas: 2
   tokenDuration: 24h0m0s
   version: 9.5.17
+status:
+  phase: Succeeded
+  tokenExpirationTime: "2024-06-18T11:21:27Z"
 ```
 
 This will result in a Grafana with datasources setup for the in-cluster monitoring and logging, using service account tokens managed by the operator. Authentication is handled by a `Dex IDP` instance. Every user that is `cluster-admin`will have admin access in the grafana instance, all other users will be assigned an `Editor` role.

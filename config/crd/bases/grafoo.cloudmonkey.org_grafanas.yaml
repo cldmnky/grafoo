@@ -44,7 +44,6 @@ spec:
                 items:
                   properties:
                     enabled:
-                      description: Enabled is a flag to enable or disable the DataSource
                       type: boolean
                     loki:
                       description: Loki is the configuration for the Loki DataSource
@@ -94,7 +93,7 @@ spec:
                           type: string
                       type: object
                     type:
-                      description: Type is the type of the DataSource
+                      description: DataSourceType defines the type of the data source
                       enum:
                       - prometheus-incluster
                       - loki-incluster

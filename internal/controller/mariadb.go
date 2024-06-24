@@ -389,6 +389,5 @@ func (r *GrafanaReconciler) ReconcileMariaDB(ctx context.Context, instance *graf
 	if op != ctrlutil.OperationResultCreated && op != ctrlutil.OperationResultUpdated {
 		logger.Info("MariaDB deployment", "operation", op)
 	}
-
 	return nil
 }

@@ -78,15 +78,29 @@ type Dex struct {
 	// +kubebuilder:validation:Optional
 	Image string `json:"image,omitempty"`
 }
+
+// DataSourceType defines the type of the data source
+//
+// +kubebuilder:validation:Enum=prometheus-incluster;loki-incluster;tempo-incluster
+type DataSourceType string
+
+const (
+	// PrometheusInCluster is the Prometheus data source type
+	PrometheusInCluster DataSourceType = "prometheus-incluster"
+	// LokiInCluster is the Loki data source type
+	LokiInCluster DataSourceType = "loki-incluster"
+	// TempoInCluster is the Tempo data source type
+	TempoInCluster DataSourceType = "tempo-incluster"
+)
+
 type DataSource struct {
 	// Name is the name of the DataSource
 	// +kubebuilder:validation:Required
 	Name string `json:"name,omitempty"`
-	// Type is the type of the DataSource
+	// +required
 	// +kubebuilder:validation:Required
-	// +kubebuilder:validation:Enum=prometheus-incluster;loki-incluster;tempo-incluster
-	Type string `json:"type,omitempty"`
-	// Enabled is a flag to enable or disable the DataSource
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:select:tempo-incluster","urn:alm:descriptor:com.tectonic.ui:select:loki-incluster","urn:alm:descriptor:com.tectonic.ui:select:prometheus-incluster"},displayName="DataSource type"
+	Type DataSourceType `json:"type,omitempty"`
 	// +kubebuilder:validation:Required
 	Enabled bool `json:"enabled,omitempty"`
 	// Loki is the configuration for the Loki DataSource

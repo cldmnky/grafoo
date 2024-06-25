@@ -163,14 +163,18 @@ func (ds *DataSource) GetDataSourceNameHash() string {
 type GrafanaStatus struct {
 	// TokenExpirationTime is the time when the token will expire
 	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:displayName="Token expiration time"
 	TokenExpirationTime *metav1.Time `json:"tokenExpirationTime,omitempty"`
 	Phase               string       `json:"phase,omitempty"`
+	// +operator-sdk:csv:customresourcedefinitions:type=status
+	Conditions []metav1.Condition `json:"conditions"`
 }
 
 //+kubebuilder:object:root=true
 //+kubebuilder:subresource:status
 
 // Grafana is the Schema for the grafanas API
+// +kubebuilder:subresource:status
 type Grafana struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`

@@ -17,25 +17,29 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"fmt"
 	"path/filepath"
 	"runtime"
 	"testing"
-
 	//+kubebuilder:scaffold:imports
 
 	grafanav1beta1 "github.com/grafana/grafana-operator/v5/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 	configv1 "github.com/openshift/api/config/v1"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/envtest"
 	logf "sigs.k8s.io/controller-runtime/pkg/log"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
+	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	grafoov1alpha1 "github.com/cldmnky/grafoo/api/v1alpha1"
 )
@@ -43,11 +47,19 @@ import (
 // These tests use Ginkgo (BDD-style Go testing framework). Refer to
 // http://onsi.github.io/ginkgo/ to learn more about Ginkgo.
 
-var cfg *rest.Config
-var k8sClient client.Client
-var testEnv *envtest.Environment
-var clientSet *kubernetes.Clientset
-var dynamicClient *dynamic.DynamicClient
+var (
+	cfg           *rest.Config
+	k8sClient     client.Client
+	testEnv       *envtest.Environment
+	clientSet     *kubernetes.Clientset
+	dynamicClient *dynamic.DynamicClient
+	cancel        context.CancelFunc
+	ctx           context.Context
+)
+
+const (
+	resourceName = "test-resource"
+)
 
 func TestControllers(t *testing.T) {
 	RegisterFailHandler(Fail)
@@ -57,17 +69,12 @@ func TestControllers(t *testing.T) {
 
 var _ = BeforeSuite(func() {
 	logf.SetLogger(zap.New(zap.WriteTo(GinkgoWriter), zap.UseDevMode(true)))
+	ctx, cancel = context.WithCancel(context.TODO())
 
 	By("bootstrapping test environment")
 	testEnv = &envtest.Environment{
 		CRDDirectoryPaths:     []string{filepath.Join("..", "..", "config", "crd", "bases")},
 		ErrorIfCRDPathMissing: true,
-
-		// The BinaryAssetsDirectory is only required if you want to run the tests directly
-		// without call the makefile target test. If not informed it will look for the
-		// default path defined in controller-runtime which is /usr/local/kubebuilder/.
-		// Note that you must have the required binaries setup under the bin directory to perform
-		// the tests directly. When we run make test it will be setup and used automatically.
 		BinaryAssetsDirectory: filepath.Join("..", "..", "bin", "k8s",
 			fmt.Sprintf("1.28.3-%s-%s", runtime.GOOS, runtime.GOARCH)),
 	}
@@ -101,10 +108,54 @@ var _ = BeforeSuite(func() {
 	Expect(err).NotTo(HaveOccurred())
 	Expect(dynamicClient).NotTo(BeNil())
 
+	By("creating a cluster ingress object")
+	ingress := &configv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "cluster",
+		},
+		Spec: configv1.IngressSpec{
+			Domain: "apps.foo.bar",
+		},
+	}
+	Expect(k8sClient.Create(ctx, ingress)).To(Succeed())
+
+	By("creating a grafana service account")
+	serviceAccount := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      resourceName + "-sa",
+			Namespace: "default",
+		},
+	}
+	Expect(k8sClient.Create(ctx, serviceAccount)).To(Succeed())
+
+	By("setting up the controller manager")
+	mgr, err := ctrl.NewManager(cfg, ctrl.Options{
+		Scheme:                 scheme.Scheme,
+		HealthProbeBindAddress: "",
+		PprofBindAddress:       "",
+		Metrics: metricsserver.Options{
+			BindAddress: "127.0.0.1:8080",
+		},
+	})
+	Expect(err).ToNot(HaveOccurred())
+
+	By("setting up and running the Grafana controller")
+	err = (&GrafanaReconciler{
+		Client:    mgr.GetClient(),
+		Scheme:    mgr.GetScheme(),
+		Clientset: clientSet,
+	}).SetupWithManager(mgr)
+	Expect(err).ToNot(HaveOccurred())
+	go func() {
+		err = mgr.Start(ctx)
+		Expect(err).ToNot(HaveOccurred())
+	}()
+
 })
 
 var _ = AfterSuite(func() {
 	By("tearing down the test environment")
+	cancel()
 	err := testEnv.Stop()
 	Expect(err).NotTo(HaveOccurred())
 })

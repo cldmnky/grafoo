@@ -14,6 +14,16 @@ spec:
       displayName: Grafana
       kind: Grafana
       name: grafanas.grafoo.cloudmonkey.org
+      specDescriptors:
+      - displayName: DataSource type
+        path: datasources[0].type
+        x-descriptors:
+        - urn:alm:descriptor:com.tectonic.ui:select:tempo-incluster
+        - urn:alm:descriptor:com.tectonic.ui:select:loki-incluster
+        - urn:alm:descriptor:com.tectonic.ui:select:prometheus-incluster
+      statusDescriptors:
+      - displayName: Conditions
+        path: conditions
       version: v1alpha1
   description: grafoo deploys Grafana in OpenShift and manages datasources that connects
     to the in-cluster monitoring and loki logging stack

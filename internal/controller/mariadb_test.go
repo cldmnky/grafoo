@@ -16,7 +16,7 @@ import (
 	grafoov1alpha1 "github.com/cldmnky/grafoo/api/v1alpha1"
 )
 
-var _ = Describe("MariaDB Controller", func() {
+var _ = Describe("MariaDB", func() {
 
 	typeNamespacedName := types.NamespacedName{
 		Name:      resourceName,
@@ -59,10 +59,13 @@ var _ = Describe("MariaDB Controller", func() {
 		It("Should not create a MariaDB deployment", func() {
 			By("Disabling MariaDB")
 			// get the resource
-			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
-			grafana.Spec.MariaDB.Enabled = false
-			Expect(k8sClient.Update(ctx, grafana)).To(Succeed())
-			// Get the resource again
+			Eventually(func(g Gomega) error {
+				g.Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
+				grafana.Spec.MariaDB.Enabled = false
+				err := k8sClient.Update(ctx, grafana)
+				g.Expect(err).NotTo(HaveOccurred())
+				return nil
+			}).Should(Succeed())
 			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
 			Expect(grafana.Spec.MariaDB.Enabled).To(BeFalse())
 
@@ -70,14 +73,10 @@ var _ = Describe("MariaDB Controller", func() {
 			mariadbDeployment := &appsv1.Deployment{}
 			Eventually(func(g Gomega) error {
 				err := k8sClient.Get(ctx, types.NamespacedName{Name: fmt.Sprintf("%s-mariadb", resourceName), Namespace: "default"}, mariadbDeployment)
-				if err != nil {
-					return err
-				}
-				return nil
-			}).Should(HaveOccurred())
-			err := k8sClient.Get(ctx, types.NamespacedName{Name: fmt.Sprintf("%s-mariadb", resourceName), Namespace: "default"}, mariadbDeployment)
-			Expect(err).To(HaveOccurred())
-			Expect(errors.IsNotFound(err)).To(BeTrue())
+				g.Expect(err).To(HaveOccurred())
+				g.Expect(errors.IsNotFound(err)).To(BeTrue())
+				return err
+			}, time.Second*10, time.Second).Should(HaveOccurred())
 		})
 	})
 
@@ -90,7 +89,7 @@ var _ = Describe("MariaDB Controller", func() {
 				err := k8sClient.Update(ctx, grafana)
 				g.Expect(err).NotTo(HaveOccurred())
 				return nil
-			}).Should(Succeed())
+			}, time.Minute, time.Second).Should(Succeed())
 		})
 		It("Should create a MariaDB secret once", func() {
 

@@ -21,7 +21,7 @@ import (
 func (r *GrafanaReconciler) ReconcileMariaDB(ctx context.Context, instance *grafoov1alpha1.Grafana) error {
 	logger := log.FromContext(ctx)
 	logger.Info("Reconciling MariaDB")
-	if !instance.Spec.MariaDB.Enabled {
+	if !instance.Spec.MariaDB.Enabled || instance.Spec.MariaDB == nil {
 		logger.Info("MariaDB is disabled")
 		// Clean up MariaDB resources
 		// Delete MariaDB deployment

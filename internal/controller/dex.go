@@ -38,11 +38,11 @@ func (r *GrafanaReconciler) ReconcileDex(ctx context.Context, instance *grafoov1
 					"clientSecret": uuid.New().String(),
 				},
 			}
-			if err := r.Client.Create(ctx, dexClientSecret); err != nil {
-				return err
-			}
 			// set the owner reference
 			if err := ctrl.SetControllerReference(instance, dexClientSecret, r.Scheme); err != nil {
+				return err
+			}
+			if err := r.Client.Create(ctx, dexClientSecret); err != nil {
 				return err
 			}
 		} else {
@@ -83,22 +83,46 @@ func (r *GrafanaReconciler) ReconcileDex(ctx context.Context, instance *grafoov1
 		return err
 	}
 
-	// create a new token for the dex service account
-	request := &authenticationv1.TokenRequest{
-		Spec: authenticationv1.TokenRequestSpec{
-			Audiences:         nil,
-			ExpirationSeconds: int64Ptr(int64(instance.Spec.TokenDuration.Duration.Seconds())),
+	boundTokenSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-dex-token", instance.Name),
+			Namespace: instance.Namespace,
 		},
 	}
-	resp, err := r.Clientset.CoreV1().ServiceAccounts(instance.Namespace).CreateToken(ctx, dexServiceAccount.Name, request, metav1.CreateOptions{})
+
+	op, err := CreateOrUpdateWithRetries(ctx, r.Client, boundTokenSecret, func() error {
+		boundTokenSecret.Labels = r.generateLabelsForComponent(instance, "dex")
+		return ctrl.SetControllerReference(instance, boundTokenSecret, r.Scheme)
+	})
 	if err != nil {
+		logger.Error(err, "Failed to create bound token secret")
 		return err
 	}
-	logger.Info("Created token for dex service account", "token expiration", resp.Status.ExpirationTimestamp.Time)
 
-	saToken := resp.Status.Token
-	dexConfig := map[string]string{
-		"config.yaml": fmt.Sprintf(`
+	var configSha string
+	// only create the token if the secret was created or updated
+	if op == controllerutil.OperationResultUpdated || op == controllerutil.OperationResultCreated {
+
+		request := &authenticationv1.TokenRequest{
+			Spec: authenticationv1.TokenRequestSpec{
+				Audiences: nil,
+				BoundObjectRef: &authenticationv1.BoundObjectReference{
+					Kind:       "Secret",
+					Name:       boundTokenSecret.Name,
+					UID:        boundTokenSecret.UID,
+					APIVersion: "v1",
+				},
+			},
+		}
+		resp, err := r.Clientset.CoreV1().ServiceAccounts(instance.Namespace).CreateToken(ctx, dexServiceAccount.Name, request, metav1.CreateOptions{})
+		if err != nil {
+			return err
+		}
+		logger.Info("Created token for dex service account", "token expiration", resp.Status.ExpirationTimestamp.Time)
+
+		saToken := resp.Status.Token
+		dexConfig := map[string]string{
+			"config.yaml": fmt.Sprintf(`
 logger:
   level: debug
 connectors:
@@ -129,27 +153,28 @@ telemetry:
 web:
   http: 0.0.0.0:5556	
 `, instance.Namespace, instance.Name, saToken, dexRouteUri, dexRouteUri, grafanaRouteUri, clientSecret),
-	}
-	// Create a secret for the dex config
-	dexSecret := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      r.generateNameForComponent(instance, "dex"),
-			Namespace: instance.Namespace,
-		},
-	}
-	// Get the sha for the secret
-	configSha := sha256ForSecret(dexSecret.StringData["config.yaml"])
+		}
+		// Create a secret for the dex config
+		dexSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      r.generateNameForComponent(instance, "dex"),
+				Namespace: instance.Namespace,
+			},
+		}
+		// Get the sha for the secret
+		configSha = sha256ForSecret(dexSecret.StringData["config.yaml"])
 
-	op, err := CreateOrUpdateWithRetries(ctx, r.Client, dexSecret, func() error {
-		dexSecret.Labels = r.generateLabelsForComponent(instance, "dex")
-		dexSecret.StringData = dexConfig
-		return ctrl.SetControllerReference(instance, dexSecret, r.Scheme)
-	})
-	if err != nil {
-		return err
-	}
-	if op == controllerutil.OperationResultUpdated {
-		logger.Info("Updated dex config secret", "sha", configSha)
+		op, err := CreateOrUpdateWithRetries(ctx, r.Client, dexSecret, func() error {
+			dexSecret.Labels = r.generateLabelsForComponent(instance, "dex")
+			dexSecret.StringData = dexConfig
+			return ctrl.SetControllerReference(instance, dexSecret, r.Scheme)
+		})
+		if err != nil {
+			return err
+		}
+		if op == controllerutil.OperationResultUpdated {
+			logger.Info("Updated dex config secret", "sha", configSha)
+		}
 	}
 
 	// Create a dexDeployment instance for authentication

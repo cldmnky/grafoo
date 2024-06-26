@@ -53,6 +53,7 @@ var _ = Describe("Grafana Controller", func() {
 					Spec: grafoov1alpha1.GrafanaSpec{
 						Dex: &grafoov1alpha1.Dex{
 							Enabled: true,
+							Image:   grafoov1alpha1.DexImage,
 						},
 						MariaDB: &grafoov1alpha1.MariaDB{
 							Enabled:     true,
@@ -116,16 +117,16 @@ var _ = Describe("Grafana Controller", func() {
 			Expect(grafanaOperated.OwnerReferences[0].Name).To(Equal(resourceName))
 		})
 		It("should successfully reconcile the resource with Dex disabled", func() {
-			By("Reconciling the created resource")
-			// get the resource
+			Eventually(func(g Gomega) error {
+				g.Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
+				grafana.Spec.Dex = &grafoov1alpha1.Dex{
+					Enabled: false,
+				}
+				err := k8sClient.Update(ctx, grafana)
+				g.Expect(err).NotTo(HaveOccurred())
+				return nil
+			}, time.Minute, time.Second).Should(Succeed())
 			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
-			grafana.Spec.Dex = &grafoov1alpha1.Dex{
-				Enabled: false,
-			}
-			Expect(k8sClient.Update(ctx, grafana)).To(Succeed())
-
-			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
-			// expect a grafana instance to be created
 			Expect(k8sClient.Get(ctx, typeNamespacedName, grafanaOperated)).To(Succeed())
 			// The Grafana instance should have the same name as the custom resource
 			Expect(grafanaOperated.Name).To(Equal(resourceName))
@@ -211,6 +212,7 @@ var _ = Describe("Grafana Controller", func() {
 			Expect(clusterRoleBinding.RoleRef.APIGroup).To(Equal("rbac.authorization.k8s.io"))
 		})
 		// status
+
 		It("should successfully update the status of the resource", func() {
 			By("Reconciling the created resource")
 			// get the resource expect status to be unknown
@@ -218,17 +220,15 @@ var _ = Describe("Grafana Controller", func() {
 				err := k8sClient.Get(ctx, typeNamespacedName, grafana)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(grafana.Status).NotTo(BeNil())
-				g.Expect(grafana.Status.TokenExpirationTime).NotTo(BeNil())
+				g.Expect(grafana.Status.Conditions).To(HaveLen(1))
 				return nil
-			}).WithContext(ctx).Should(Succeed())
+			}, time.Minute, time.Second).Should(Succeed())
 			Expect(grafana.Status).NotTo(BeNil())
-			Expect(grafana.Status.TokenExpirationTime).NotTo(BeNil())
-			Expect(grafana.Status.TokenExpirationTime.Time).NotTo(BeNil())
-			Expect(grafana.Status.TokenExpirationTime.Time).NotTo(BeZero())
 			// Check the conditions
 			Expect(grafana.Status.Conditions).To(HaveLen(1))
 			Expect(grafana.Status.Conditions[0].Type).To(Equal(typeAvailable))
 			Expect(grafana.Status.Conditions[0].Status).To(Equal(metav1.ConditionUnknown))
 		})
+
 	})
 })

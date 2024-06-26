@@ -22,6 +22,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+
 	//+kubebuilder:scaffold:imports
 
 	grafanav1beta1 "github.com/grafana/grafana-operator/v5/api/v1beta1"
@@ -58,7 +59,7 @@ var (
 )
 
 const (
-	resourceName = "test-resource"
+	resourceName = "test-grafana"
 )
 
 func TestControllers(t *testing.T) {

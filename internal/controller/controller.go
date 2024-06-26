@@ -40,10 +40,9 @@ import (
 // Definitions to manage status conditions
 const (
 	typeAvailable    = "Available"
-	typeProgressing  = "Progressing"
-	typeDegraded     = "Degraded"
 	typeDexReady     = "DexReady"
 	typeMariaDBReady = "MariaDBReady"
+	typeDataSources  = "DataSources"
 )
 
 // GrafanaReconciler reconciles a Grafana object
@@ -105,6 +104,20 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			Reason:  "ReconciliationStarted",
 			Message: "Reconciliation has started",
 		})
+		// Dex status
+		meta.SetStatusCondition(&grafooInstance.Status.Conditions, metav1.Condition{
+			Type:    typeDexReady,
+			Status:  metav1.ConditionUnknown,
+			Reason:  "DexNotReconciled",
+			Message: "Dex has not been reconciled",
+		})
+		// MariaDB status
+		meta.SetStatusCondition(&grafooInstance.Status.Conditions, metav1.Condition{
+			Type:    typeMariaDBReady,
+			Status:  metav1.ConditionUnknown,
+			Reason:  "MariaDBNotReconciled",
+			Message: "MariaDB has not been reconciled",
+		})
 		if err := r.Status().Update(ctx, grafooInstance); err != nil {
 			logger.Error(err, "Failed to update status")
 			return ctrl.Result{}, err
@@ -121,6 +134,17 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if grafooInstance.Spec.Dex != nil && grafooInstance.Spec.Dex.Enabled {
 		if err := r.ReconcileDex(ctx, grafooInstance); err != nil {
 			logger.Error(err, "Failed to reconcile dex")
+			// status
+			meta.SetStatusCondition(&grafooInstance.Status.Conditions, metav1.Condition{
+				Type:    typeDexReady,
+				Status:  metav1.ConditionFalse,
+				Reason:  "DexNotReconciled",
+				Message: "Failed to reconcile Dex",
+			})
+			// Update status
+			if err := r.Status().Update(ctx, grafooInstance); err != nil {
+				logger.Error(err, "Failed to update status")
+			}
 			return ctrl.Result{}, err
 		}
 		// Update status
@@ -139,6 +163,17 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// Reconcile MariaDB
 	if err := r.ReconcileMariaDB(ctx, grafooInstance); err != nil {
 		logger.Error(err, "Failed to reconcile mariadb")
+		// status
+		meta.SetStatusCondition(&grafooInstance.Status.Conditions, metav1.Condition{
+			Type:    typeMariaDBReady,
+			Status:  metav1.ConditionFalse,
+			Reason:  "MariaDBNotReconciled",
+			Message: "Failed to reconcile MariaDB",
+		})
+		// Update status
+		if err := r.Status().Update(ctx, grafooInstance); err != nil {
+			logger.Error(err, "Failed to update status")
+		}
 		return ctrl.Result{}, err
 	}
 	// Update status
@@ -156,24 +191,51 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// Reconcile Grafana
 	if err := r.ReconcileGrafana(ctx, grafooInstance); err != nil {
 		logger.Error(err, "Failed to reconcile grafana")
+		// status
+		meta.SetStatusCondition(&grafooInstance.Status.Conditions, metav1.Condition{
+			Type:    typeAvailable,
+			Status:  metav1.ConditionFalse,
+			Reason:  "GrafanaNotReconciled",
+			Message: "Failed to reconcile Grafana",
+		})
+		// Update status
+		if err := r.Status().Update(ctx, grafooInstance); err != nil {
+			logger.Error(err, "Failed to update status")
+		}
 		return ctrl.Result{}, err
 	}
 
 	// Create a datasource instance
 	if err := r.ReconcileDataSources(ctx, grafooInstance); err != nil {
 		logger.Error(err, "Failed to reconcile datasource")
+		// status
+		meta.SetStatusCondition(&grafooInstance.Status.Conditions, metav1.Condition{
+			Type:    typeDataSources,
+			Status:  metav1.ConditionFalse,
+			Reason:  "DataSourcesNotReconciled",
+			Message: "Failed to reconcile DataSources",
+		})
 		return ctrl.Result{}, err
 	}
-	/*
-		tokenExpirationTime := metav1.Time{Time: time.Now().Add(grafooInstance.Spec.TokenDuration.Duration)}
-		grafooInstance.Status.TokenExpirationTime = &tokenExpirationTime
-		// Phase
-		grafooInstance.Status.Phase = grafoov1alpha1.PhaseSucceeded
-		if err := r.Status().Update(ctx, grafooInstance); err != nil {
-			logger.Error(err, "Failed to update status")
-			return ctrl.Result{}, err
-		}
-	*/
+	// Update status
+	meta.SetStatusCondition(&grafooInstance.Status.Conditions, metav1.Condition{
+		Type:    typeDataSources,
+		Status:  metav1.ConditionTrue,
+		Reason:  "DataSourcesReconciled",
+		Message: "DataSources have been reconciled",
+	})
+	// Update overall status
+	meta.SetStatusCondition(&grafooInstance.Status.Conditions, metav1.Condition{
+		Type:    typeAvailable,
+		Status:  metav1.ConditionTrue,
+		Reason:  "GrafanaReconciled",
+		Message: "Grafana has been reconciled",
+	})
+	if err := r.Status().Update(ctx, grafooInstance); err != nil {
+		logger.Error(err, "Failed to update status")
+		return ctrl.Result{}, err
+	}
+
 	return ctrl.Result{Requeue: true, RequeueAfter: grafooInstance.Spec.TokenDuration.Duration}, nil
 }
 

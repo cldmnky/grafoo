@@ -220,13 +220,13 @@ var _ = Describe("Grafana Controller", func() {
 				err := k8sClient.Get(ctx, typeNamespacedName, grafana)
 				g.Expect(err).NotTo(HaveOccurred())
 				g.Expect(grafana.Status).NotTo(BeNil())
-				g.Expect(grafana.Status.Conditions).To(HaveLen(3))
+				g.Expect(grafana.Status.Conditions).To(HaveLen(4))
 				return nil
 			}, time.Minute, time.Second).Should(Succeed())
 			Expect(grafana.Status).NotTo(BeNil())
 			// Check the conditions
 			Expect(grafana.Status.Conditions[0].Type).To(Equal(typeAvailable))
-			Expect(grafana.Status.Conditions[0].Status).To(Equal(metav1.ConditionUnknown))
+			Expect(grafana.Status.Conditions[0].Status).To(Equal(metav1.ConditionTrue))
 		})
 
 	})

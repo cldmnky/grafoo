@@ -14,7 +14,7 @@ import (
 	grafoov1alpha1 "github.com/cldmnky/grafoo/api/v1alpha1"
 )
 
-func (r *GrafanaReconciler) ReconcileDataSource(ctx context.Context, instance *grafoov1alpha1.Grafana) error {
+func (r *GrafanaReconciler) ReconcileDataSources(ctx context.Context, instance *grafoov1alpha1.Grafana) error {
 	logger := log.FromContext(ctx)
 	// Create a datasource for the Grafana instance for prometheus
 	request := &authenticationv1.TokenRequest{

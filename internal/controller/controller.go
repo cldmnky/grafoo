@@ -18,15 +18,14 @@ package controller
 
 import (
 	"context"
-	"fmt"
-	"net/url"
-	"time"
 
 	grafanav1beta1 "github.com/grafana/grafana-operator/v5/api/v1beta1"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/client-go/dynamic"
@@ -36,6 +35,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	grafoov1alpha1 "github.com/cldmnky/grafoo/api/v1alpha1"
+)
+
+// Definitions to manage status conditions
+const (
+	typeAvailable    = "Available"
+	typeDexReady     = "DexReady"
+	typeMariaDBReady = "MariaDBReady"
+	typeDataSources  = "DataSources"
 )
 
 // GrafanaReconciler reconciles a Grafana object
@@ -76,349 +83,160 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	logger := log.FromContext(ctx)
 	logger.Info("Reconciling Grafana")
 
-	// Fetch the Grafana instance
-	instance := &grafoov1alpha1.Grafana{}
-	err := r.Get(ctx, req.NamespacedName, instance)
+	// Fetch the Grafana grafooInstance
+	grafooInstance := &grafoov1alpha1.Grafana{}
+	err := r.Get(ctx, req.NamespacedName, grafooInstance)
 	if err != nil {
+		if apierrors.IsNotFound(err) {
+			logger.Info("Grafana resource not found. Ignoring since object must be deleted")
+			return ctrl.Result{}, nil
+		}
+		// Error reading the object - requeue the request.
 		logger.Error(err, "Failed to get Grafana instance")
 		return ctrl.Result{}, err
 	}
 
-	// Reconcile dex
-	if instance.Spec.Dex != nil && instance.Spec.Dex.Enabled {
-		if err := r.ReconcileDex(ctx, instance); err != nil {
+	// Update initial status
+	if grafooInstance.Status.Conditions == nil || len(grafooInstance.Status.Conditions) == 0 {
+		meta.SetStatusCondition(&grafooInstance.Status.Conditions, metav1.Condition{
+			Type:    typeAvailable,
+			Status:  metav1.ConditionUnknown,
+			Reason:  "ReconciliationStarted",
+			Message: "Reconciliation has started",
+		})
+		// Dex status
+		meta.SetStatusCondition(&grafooInstance.Status.Conditions, metav1.Condition{
+			Type:    typeDexReady,
+			Status:  metav1.ConditionUnknown,
+			Reason:  "DexNotReconciled",
+			Message: "Dex has not been reconciled",
+		})
+		// MariaDB status
+		meta.SetStatusCondition(&grafooInstance.Status.Conditions, metav1.Condition{
+			Type:    typeMariaDBReady,
+			Status:  metav1.ConditionUnknown,
+			Reason:  "MariaDBNotReconciled",
+			Message: "MariaDB has not been reconciled",
+		})
+		if err := r.Status().Update(ctx, grafooInstance); err != nil {
+			logger.Error(err, "Failed to update status")
+			return ctrl.Result{}, err
+		}
+		// re-fetch the grafooInstance to get the updated resource version
+		if err := r.Get(ctx, req.NamespacedName, grafooInstance); err != nil {
+			logger.Error(err, "Failed to get Grafana instance")
+			return ctrl.Result{}, err
+		}
+		logger.Info("Updated initial status")
+	}
+
+	// Reconcile Dex
+	if grafooInstance.Spec.Dex != nil && grafooInstance.Spec.Dex.Enabled {
+		if err := r.ReconcileDex(ctx, grafooInstance); err != nil {
 			logger.Error(err, "Failed to reconcile dex")
-			// Set the status to failed
-			instance.Status.Phase = grafoov1alpha1.PhaseFailed
-			if err := r.Status().Update(ctx, instance); err != nil {
+			// status
+			meta.SetStatusCondition(&grafooInstance.Status.Conditions, metav1.Condition{
+				Type:    typeDexReady,
+				Status:  metav1.ConditionFalse,
+				Reason:  "DexNotReconciled",
+				Message: "Failed to reconcile Dex",
+			})
+			// Update status
+			if err := r.Status().Update(ctx, grafooInstance); err != nil {
 				logger.Error(err, "Failed to update status")
 			}
+			return ctrl.Result{}, err
+		}
+		// Update status
+		meta.SetStatusCondition(&grafooInstance.Status.Conditions, metav1.Condition{
+			Type:    typeDexReady,
+			Status:  metav1.ConditionTrue,
+			Reason:  "DexReconciled",
+			Message: "Dex has been reconciled",
+		})
+		if err := r.Status().Update(ctx, grafooInstance); err != nil {
+			logger.Error(err, "Failed to update status")
 			return ctrl.Result{}, err
 		}
 	}
 
 	// Reconcile MariaDB
-
-	if err := r.ReconcileMariaDB(ctx, instance); err != nil {
+	if err := r.ReconcileMariaDB(ctx, grafooInstance); err != nil {
 		logger.Error(err, "Failed to reconcile mariadb")
-		// Set the status to failed
-		instance.Status.Phase = grafoov1alpha1.PhaseFailed
-		if err := r.Status().Update(ctx, instance); err != nil {
+		// status
+		meta.SetStatusCondition(&grafooInstance.Status.Conditions, metav1.Condition{
+			Type:    typeMariaDBReady,
+			Status:  metav1.ConditionFalse,
+			Reason:  "MariaDBNotReconciled",
+			Message: "Failed to reconcile MariaDB",
+		})
+		// Update status
+		if err := r.Status().Update(ctx, grafooInstance); err != nil {
 			logger.Error(err, "Failed to update status")
 		}
 		return ctrl.Result{}, err
 	}
-
-	// Create a mariadb instance
-
-	// Create a Grafana instance
-	grafana := &grafanav1beta1.Grafana{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      instance.Name,
-			Namespace: instance.Namespace,
-		},
-	}
-	// TODO: if not dex enabled
-	clientSecret, err := r.getClientSecret(ctx, instance)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	// dexRouteDomain is dex routeuri withoiut the protocol
-	grafanaRouteUri := r.generateRouteUriForComponent(ctx, instance, "grafana")
-	u, err := url.Parse(grafanaRouteUri)
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	grafanaRouteDomain := u.Hostname()
-	var databaseConfig map[string]string
-	if instance.Spec.MariaDB.Enabled {
-		// Get the mariadb secret
-		mariadbSecret := &corev1.Secret{}
-		if err := r.Get(ctx, client.ObjectKey{Name: r.generateNameForComponent(instance, "mariadb"), Namespace: instance.Namespace}, mariadbSecret); err != nil {
-			return ctrl.Result{}, err
-		}
-		mariaDBUrl := fmt.Sprintf("mysql://%s:%s@%s:3306/%s", string(mariadbSecret.Data["database-user"]), string(mariadbSecret.Data["database-password"]), r.generateNameForComponent(instance, "mariadb"), string(mariadbSecret.Data["database-name"]))
-		databaseConfig = map[string]string{
-			"type": "mysql",
-			"url":  mariaDBUrl,
-		}
-	} else {
-		databaseConfig = map[string]string{
-			"type": "sqlite3",
-		}
-	}
-
-	grafanaSpec := grafanav1beta1.GrafanaSpec{
-		Version: instance.Spec.Version,
-		Deployment: &grafanav1beta1.DeploymentV1{
-			Spec: grafanav1beta1.DeploymentV1Spec{
-				Replicas: instance.Spec.Replicas,
-			},
-		},
-		Route: &grafanav1beta1.RouteOpenshiftV1{
-			Spec: &grafanav1beta1.RouteOpenShiftV1Spec{
-				Host: grafanaRouteDomain,
-			},
-		},
-		Config: map[string]map[string]string{
-			"server": {
-				"root_url": r.generateRouteUriForComponent(ctx, instance, "grafana"),
-			},
-			"log": {
-				"mode":  "console",
-				"level": "info",
-			},
-			"auth": {
-				"disable_login_form": "false",
-			},
-			"auth.generic_oauth": {
-				"enabled":                  "true",
-				"name":                     "Dex SSO",
-				"allow_sign_up":            "true",
-				"client_id":                "grafana",
-				"client_secret":            clientSecret,
-				"scopes":                   "openid email groups",
-				"auth_url":                 r.generateRouteUriForComponent(ctx, instance, "dex") + "/auth",
-				"token_url":                r.generateRouteUriForComponent(ctx, instance, "dex") + "/token",
-				"api_url":                  r.generateRouteUriForComponent(ctx, instance, "dex") + "/userinfo",
-				"tls_skip_verify_insecure": "true",
-				"role_attribute_path":      "contains(groups[*], 'system:cluster-admins') && 'Admin' || contains(groups[*], 'system:authenticated') && 'Editor' || 'Viewer'",
-			},
-			"database": databaseConfig,
-		},
-	}
-
-	_, err = CreateOrUpdateWithRetries(ctx, r.Client, grafana, func() error {
-		grafana.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
-		grafana.Spec = grafanaSpec
-		return ctrl.SetControllerReference(instance, grafana, r.Scheme)
-	})
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	// Create a clusterrole for the grafana service account that allows subjectaccessreviews
-	grafanaClusterRole := &rbacv1.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: r.generateNameForComponent(instance, "auth-reviewer"),
-		},
-	}
-	grafanaClusterRoleRules := []rbacv1.PolicyRule{
-		{
-			APIGroups: []string{"authorization.k8s.io"},
-			Resources: []string{"subjectaccessreviews"},
-			Verbs:     []string{"create"},
-		},
-		{
-			APIGroups: []string{"authorization.k8s.io"},
-			Resources: []string{"tokenreviews"},
-			Verbs:     []string{"create"},
-		},
-	}
-	_, err = CreateOrUpdateWithRetries(ctx, r.Client, grafanaClusterRole, func() error {
-		grafanaClusterRole.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
-		grafanaClusterRole.Rules = grafanaClusterRoleRules
-		return nil
-	})
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	// Create a clusterrolebinging for the auth-reviewer clusterrole
-	grafanaClusterRoleBinding := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: r.generateNameForComponent(instance, "auth-reviewer"),
-		},
-	}
-	_, err = CreateOrUpdateWithRetries(ctx, r.Client, grafanaClusterRoleBinding, func() error {
-		grafanaClusterRoleBinding.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
-		grafanaClusterRoleBinding.Subjects = []rbacv1.Subject{
-			{
-				Kind:      "ServiceAccount",
-				Name:      r.generateNameForComponent(instance, "sa"),
-				Namespace: instance.Namespace,
-			},
-		}
-		grafanaClusterRoleBinding.RoleRef = rbacv1.RoleRef{
-			Kind:     "ClusterRole",
-			Name:     r.generateNameForComponent(instance, "auth-reviewer"),
-			APIGroup: "rbac.authorization.k8s.io",
-		}
-		return nil
-	})
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	// Create a clusterrole for the grafana service account that allows tempostack reads
-	grafanaTempoClusterRole := &rbacv1.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: r.generateNameForComponent(instance, "tempostack-traces-reader"),
-		},
-	}
-	grafanaTempoClusterRoleRules := []rbacv1.PolicyRule{
-		{
-			APIGroups:     []string{"tempo.grafana.com"},
-			Resources:     []string{"dev"},
-			ResourceNames: []string{"traces"},
-			Verbs:         []string{"get"},
-		},
-	}
-	_, err = CreateOrUpdateWithRetries(ctx, r.Client, grafanaTempoClusterRole, func() error {
-		grafanaTempoClusterRole.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
-		grafanaTempoClusterRole.Rules = grafanaTempoClusterRoleRules
-		return nil
-	})
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	// Create a clusterrolebinging for the tempostack-traces-reader clusterrole
-	grafanaTempoClusterRoleBinding := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: r.generateNameForComponent(instance, "tempostack-traces-reader"),
-		},
-	}
-	_, err = CreateOrUpdateWithRetries(ctx, r.Client, grafanaTempoClusterRoleBinding, func() error {
-		grafanaTempoClusterRoleBinding.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
-		grafanaTempoClusterRoleBinding.Subjects = []rbacv1.Subject{
-			{
-				Kind:      "ServiceAccount",
-				Name:      r.generateNameForComponent(instance, "sa"),
-				Namespace: instance.Namespace,
-			},
-		}
-		grafanaTempoClusterRoleBinding.RoleRef = rbacv1.RoleRef{
-			Kind:     "ClusterRole",
-			Name:     r.generateNameForComponent(instance, "tempostack-traces-reader"),
-			APIGroup: "rbac.authorization.k8s.io",
-		}
-		return nil
-	})
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	// Create a clusterrolebinding for the grafana service account
-	metricsClusterRoleBinding := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: r.generateNameForComponent(instance, "cluster-monitoring-view"),
-		},
-	}
-	_, err = CreateOrUpdateWithRetries(ctx, r.Client, metricsClusterRoleBinding, func() error {
-		metricsClusterRoleBinding.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
-		metricsClusterRoleBinding.Subjects = []rbacv1.Subject{
-			{
-				Kind:      "ServiceAccount",
-				Name:      r.generateNameForComponent(instance, "sa"),
-				Namespace: instance.Namespace,
-			},
-		}
-		metricsClusterRoleBinding.RoleRef = rbacv1.RoleRef{
-			Kind:     "ClusterRole",
-			Name:     "cluster-monitoring-view",
-			APIGroup: "rbac.authorization.k8s.io",
-		}
-		return nil
-	})
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	loggingAppClusterRoleBinding := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: r.generateNameForComponent(instance, "cluster-logging-application-view"),
-		},
-	}
-	_, err = CreateOrUpdateWithRetries(ctx, r.Client, loggingAppClusterRoleBinding, func() error {
-		loggingAppClusterRoleBinding.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
-		loggingAppClusterRoleBinding.Subjects = []rbacv1.Subject{
-			{
-				Kind:      "ServiceAccount",
-				Name:      r.generateNameForComponent(instance, "sa"),
-				Namespace: instance.Namespace,
-			},
-		}
-		loggingAppClusterRoleBinding.RoleRef = rbacv1.RoleRef{
-			Kind:     "ClusterRole",
-			Name:     "cluster-logging-application-view",
-			APIGroup: "rbac.authorization.k8s.io",
-		}
-		return nil
-	})
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	loggingInfraClusterRoleBinding := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: r.generateNameForComponent(instance, "cluster-logging-infrastructure-view"),
-		},
-	}
-	_, err = CreateOrUpdateWithRetries(ctx, r.Client, loggingInfraClusterRoleBinding, func() error {
-		loggingInfraClusterRoleBinding.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
-		loggingInfraClusterRoleBinding.Subjects = []rbacv1.Subject{
-			{
-				Kind:      "ServiceAccount",
-				Name:      r.generateNameForComponent(instance, "sa"),
-				Namespace: instance.Namespace,
-			},
-		}
-		loggingInfraClusterRoleBinding.RoleRef = rbacv1.RoleRef{
-			Kind:     "ClusterRole",
-			Name:     "cluster-logging-infrastructure-view",
-			APIGroup: "rbac.authorization.k8s.io",
-		}
-		return nil
-	})
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-
-	loggingAuditClusterRoleBinding := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: r.generateNameForComponent(instance, "cluster-logging-audit-view"),
-		},
-	}
-	_, err = CreateOrUpdateWithRetries(ctx, r.Client, loggingAuditClusterRoleBinding, func() error {
-		loggingAuditClusterRoleBinding.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
-		loggingAuditClusterRoleBinding.Subjects = []rbacv1.Subject{
-			{
-				Kind:      "ServiceAccount",
-				Name:      r.generateNameForComponent(instance, "sa"),
-				Namespace: instance.Namespace,
-			},
-		}
-		loggingAuditClusterRoleBinding.RoleRef = rbacv1.RoleRef{
-			Kind:     "ClusterRole",
-			Name:     "cluster-logging-audit-view",
-			APIGroup: "rbac.authorization.k8s.io",
-		}
-		return nil
-	})
-	if err != nil {
-		return ctrl.Result{}, err
-	}
-	// Create a datasource instance
-	if err := r.ReconcileDataSource(ctx, instance); err != nil {
-		logger.Error(err, "Failed to reconcile datasource")
-		// Set the status to failed
-		instance.Status.Phase = grafoov1alpha1.PhaseFailed
-		if err := r.Status().Update(ctx, instance); err != nil {
-			logger.Error(err, "Failed to update status")
-		}
-		return ctrl.Result{}, err
-	}
-
 	// Update status
-	// now + tokenDuration
-	tokenExpirationTime := metav1.Time{Time: time.Now().Add(instance.Spec.TokenDuration.Duration)}
-	instance.Status.TokenExpirationTime = &tokenExpirationTime
-	// Phase
-	instance.Status.Phase = grafoov1alpha1.PhaseSucceeded
-	if err := r.Status().Update(ctx, instance); err != nil {
+	meta.SetStatusCondition(&grafooInstance.Status.Conditions, metav1.Condition{
+		Type:    typeMariaDBReady,
+		Status:  metav1.ConditionTrue,
+		Reason:  "MariaDBReconciled",
+		Message: "MariaDB has been reconciled",
+	})
+	if err := r.Status().Update(ctx, grafooInstance); err != nil {
 		logger.Error(err, "Failed to update status")
 		return ctrl.Result{}, err
 	}
 
-	return ctrl.Result{Requeue: true, RequeueAfter: instance.Spec.TokenDuration.Duration}, nil
+	// Reconcile Grafana
+	if err := r.ReconcileGrafana(ctx, grafooInstance); err != nil {
+		logger.Error(err, "Failed to reconcile grafana")
+		// status
+		meta.SetStatusCondition(&grafooInstance.Status.Conditions, metav1.Condition{
+			Type:    typeAvailable,
+			Status:  metav1.ConditionFalse,
+			Reason:  "GrafanaNotReconciled",
+			Message: "Failed to reconcile Grafana",
+		})
+		// Update status
+		if err := r.Status().Update(ctx, grafooInstance); err != nil {
+			logger.Error(err, "Failed to update status")
+		}
+		return ctrl.Result{}, err
+	}
+
+	// Create a datasource instance
+	if err := r.ReconcileDataSources(ctx, grafooInstance); err != nil {
+		logger.Error(err, "Failed to reconcile datasource")
+		// status
+		meta.SetStatusCondition(&grafooInstance.Status.Conditions, metav1.Condition{
+			Type:    typeDataSources,
+			Status:  metav1.ConditionFalse,
+			Reason:  "DataSourcesNotReconciled",
+			Message: "Failed to reconcile DataSources",
+		})
+		return ctrl.Result{}, err
+	}
+	// Update status
+	meta.SetStatusCondition(&grafooInstance.Status.Conditions, metav1.Condition{
+		Type:    typeDataSources,
+		Status:  metav1.ConditionTrue,
+		Reason:  "DataSourcesReconciled",
+		Message: "DataSources have been reconciled",
+	})
+	// Update overall status
+	meta.SetStatusCondition(&grafooInstance.Status.Conditions, metav1.Condition{
+		Type:    typeAvailable,
+		Status:  metav1.ConditionTrue,
+		Reason:  "GrafanaReconciled",
+		Message: "Grafana has been reconciled",
+	})
+	if err := r.Status().Update(ctx, grafooInstance); err != nil {
+		logger.Error(err, "Failed to update status")
+		return ctrl.Result{}, err
+	}
+
+	return ctrl.Result{Requeue: true, RequeueAfter: grafooInstance.Spec.TokenDuration.Duration}, nil
 }
 
 // SetupWithManager sets up the controller with the Manager.

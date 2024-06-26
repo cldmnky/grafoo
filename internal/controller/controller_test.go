@@ -17,36 +17,31 @@ limitations under the License.
 package controller
 
 import (
-	"context"
+	"time"
 
 	grafanav1beta1 "github.com/grafana/grafana-operator/v5/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
-	configv1 "github.com/openshift/api/config/v1"
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	grafoov1alpha1 "github.com/cldmnky/grafoo/api/v1alpha1"
 )
 
 var _ = Describe("Grafana Controller", func() {
 	Context("When reconciling a resource", func() {
-		const resourceName = "test-resource"
-
-		ctx := context.Background()
 
 		typeNamespacedName := types.NamespacedName{
 			Name:      resourceName,
-			Namespace: "default", // TODO(user):Modify as needed
+			Namespace: "default",
 		}
 		grafana := &grafoov1alpha1.Grafana{}
 		grafanaOperated := &grafanav1beta1.Grafana{}
 
-		BeforeEach(func() {
+		BeforeEach(func(ctx SpecContext) {
 			By("creating the custom resource for the Kind Grafana")
 			err := k8sClient.Get(ctx, typeNamespacedName, grafana)
 			if err != nil && errors.IsNotFound(err) {
@@ -58,6 +53,7 @@ var _ = Describe("Grafana Controller", func() {
 					Spec: grafoov1alpha1.GrafanaSpec{
 						Dex: &grafoov1alpha1.Dex{
 							Enabled: true,
+							Image:   grafoov1alpha1.DexImage,
 						},
 						MariaDB: &grafoov1alpha1.MariaDB{
 							Enabled:     true,
@@ -68,28 +64,9 @@ var _ = Describe("Grafana Controller", func() {
 				}
 				Expect(k8sClient.Create(ctx, resource)).To(Succeed())
 			}
-			By("creating a cluster ingress object")
-			ingress := &configv1.Ingress{
-				ObjectMeta: metav1.ObjectMeta{
-					Name: "cluster",
-				},
-				Spec: configv1.IngressSpec{
-					Domain: "apps.foo.bar",
-				},
-			}
-			Expect(k8sClient.Create(ctx, ingress)).To(Succeed())
-
-			By("creating a service account")
-			serviceAccount := &corev1.ServiceAccount{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      resourceName + "-sa",
-					Namespace: "default",
-				},
-			}
-			Expect(k8sClient.Create(ctx, serviceAccount)).To(Succeed())
 		})
 
-		AfterEach(func() {
+		AfterEach(func(ctx SpecContext) {
 			// TODO(user): Cleanup logic after each test, like removing the resource instance.
 			resource := &grafoov1alpha1.Grafana{}
 			err := k8sClient.Get(ctx, typeNamespacedName, resource)
@@ -98,36 +75,13 @@ var _ = Describe("Grafana Controller", func() {
 			By("Cleanup the specific resource instance Grafana")
 			Expect(k8sClient.Delete(ctx, resource)).To(Succeed())
 
-			By("Cleanup the specific resource instance cluster ingress")
-			ingress := &configv1.Ingress{}
-			err = k8sClient.Get(ctx, types.NamespacedName{Name: "cluster"}, ingress)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(k8sClient.Delete(ctx, ingress)).To(Succeed())
-
-			By("Cleanup the specific resource instance service account")
-			serviceAccount := &corev1.ServiceAccount{}
-			err = k8sClient.Get(ctx, types.NamespacedName{
-				Name:      resourceName + "-sa",
-				Namespace: "default",
-			}, serviceAccount)
-			Expect(err).NotTo(HaveOccurred())
-			Expect(k8sClient.Delete(ctx, serviceAccount)).To(Succeed())
 		})
 		It("should successfully reconcile the resource", func() {
-			By("Reconciling the created resource")
-			controllerReconciler := &GrafanaReconciler{
-				Client:    k8sClient,
-				Scheme:    k8sClient.Scheme(),
-				Clientset: clientSet,
-				Dynamic:   dynamicClient,
-			}
-
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
 			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
 			// expect a grafana instance to be created
+			Eventually(func() error {
+				return k8sClient.Get(ctx, typeNamespacedName, grafanaOperated)
+			}, time.Minute, time.Second).Should(Succeed())
 			Expect(k8sClient.Get(ctx, typeNamespacedName, grafanaOperated)).To(Succeed())
 			// The Grafana instance should have the same name as the custom resource
 			Expect(grafanaOperated.Name).To(Equal(resourceName))
@@ -142,27 +96,17 @@ var _ = Describe("Grafana Controller", func() {
 			// Token duration
 			Expect(grafana.Spec.TokenDuration.Duration).To(Equal(grafoov1alpha1.TokenDuration.Duration))
 		})
-		// Dex is enabled
+		// Dex is enabled - move to dex test
 		It("should successfully reconcile the resource with Dex enabled", func() {
-			By("Reconciling the created resource")
-			// get the resource
-			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
-			grafana.Spec.Dex = &grafoov1alpha1.Dex{
-				Enabled: true,
-			}
-			Expect(k8sClient.Update(ctx, grafana)).To(Succeed())
-
-			controllerReconciler := &GrafanaReconciler{
-				Client:    k8sClient,
-				Scheme:    k8sClient.Scheme(),
-				Clientset: clientSet,
-				Dynamic:   dynamicClient,
-			}
-
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
+			Eventually(func(g Gomega) error {
+				g.Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
+				grafana.Spec.Dex = &grafoov1alpha1.Dex{
+					Enabled: true,
+				}
+				err := k8sClient.Update(ctx, grafana)
+				g.Expect(err).NotTo(HaveOccurred())
+				return nil
+			}, time.Minute, time.Second).Should(Succeed())
 			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
 			// expect a grafana instance to be created
 			Expect(k8sClient.Get(ctx, typeNamespacedName, grafanaOperated)).To(Succeed())
@@ -173,27 +117,16 @@ var _ = Describe("Grafana Controller", func() {
 			Expect(grafanaOperated.OwnerReferences[0].Name).To(Equal(resourceName))
 		})
 		It("should successfully reconcile the resource with Dex disabled", func() {
-			By("Reconciling the created resource")
-			// get the resource
+			Eventually(func(g Gomega) error {
+				g.Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
+				grafana.Spec.Dex = &grafoov1alpha1.Dex{
+					Enabled: false,
+				}
+				err := k8sClient.Update(ctx, grafana)
+				g.Expect(err).NotTo(HaveOccurred())
+				return nil
+			}, time.Minute, time.Second).Should(Succeed())
 			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
-			grafana.Spec.Dex = &grafoov1alpha1.Dex{
-				Enabled: false,
-			}
-			Expect(k8sClient.Update(ctx, grafana)).To(Succeed())
-
-			controllerReconciler := &GrafanaReconciler{
-				Client:    k8sClient,
-				Scheme:    k8sClient.Scheme(),
-				Clientset: clientSet,
-				Dynamic:   dynamicClient,
-			}
-
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
-			// expect a grafana instance to be created
 			Expect(k8sClient.Get(ctx, typeNamespacedName, grafanaOperated)).To(Succeed())
 			// The Grafana instance should have the same name as the custom resource
 			Expect(grafanaOperated.Name).To(Equal(resourceName))
@@ -203,25 +136,6 @@ var _ = Describe("Grafana Controller", func() {
 		})
 		// client secret
 		It("should successfully reconcile the resource with Dex enabled and client secret", func() {
-			By("Reconciling the created resource")
-			// get the resource
-			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
-			grafana.Spec.Dex = &grafoov1alpha1.Dex{
-				Enabled: true,
-			}
-			Expect(k8sClient.Update(ctx, grafana)).To(Succeed())
-
-			controllerReconciler := &GrafanaReconciler{
-				Client:    k8sClient,
-				Scheme:    k8sClient.Scheme(),
-				Clientset: clientSet,
-				Dynamic:   dynamicClient,
-			}
-
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
 			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
 			// expect a grafana instance to be created
 			Expect(k8sClient.Get(ctx, typeNamespacedName, grafanaOperated)).To(Succeed())
@@ -233,7 +147,7 @@ var _ = Describe("Grafana Controller", func() {
 			By("Checking the client secret")
 			// check the client secret
 			clientSecret := &corev1.Secret{}
-			err = k8sClient.Get(ctx, types.NamespacedName{
+			err := k8sClient.Get(ctx, types.NamespacedName{
 				Name:      grafanaOperated.Name + "-dex-client-secret",
 				Namespace: grafanaOperated.Namespace,
 			}, clientSecret)
@@ -241,11 +155,7 @@ var _ = Describe("Grafana Controller", func() {
 			clientSecretValue := clientSecret.Data["clientSecret"]
 			Expect(clientSecretValue).NotTo(BeNil())
 			Expect(clientSecretValue).NotTo(BeEmpty())
-			By("Reconciling the created resource again")
-			_, err = controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
+
 			// Get the client secret again
 			err = k8sClient.Get(ctx, types.NamespacedName{
 				Name:      grafanaOperated.Name + "-dex-client-secret",
@@ -272,24 +182,12 @@ var _ = Describe("Grafana Controller", func() {
 		// Clusterrolebinding
 		It("should successfully create a cluster role binding for the grafana account", func() {
 			By("Reconciling the created resource")
-			// get the resource
-			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
-			Expect(k8sClient.Update(ctx, grafana)).To(Succeed())
-
-			controllerReconciler := &GrafanaReconciler{
-				Client:    k8sClient,
-				Scheme:    k8sClient.Scheme(),
-				Clientset: clientSet,
-				Dynamic:   dynamicClient,
-			}
-
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
 			// expect a grafana instance to be created
-			Expect(k8sClient.Get(ctx, typeNamespacedName, grafanaOperated)).To(Succeed())
+			Eventually(func(g Gomega) error {
+				err := k8sClient.Get(ctx, typeNamespacedName, grafanaOperated)
+				g.Expect(err).NotTo(HaveOccurred())
+				return nil
+			}).Should(Succeed())
 			// The Grafana instance should have the same name as the custom resource
 			Expect(grafanaOperated.Name).To(Equal(resourceName))
 			// The grafana instance should have owner reference set to the custom resource
@@ -297,10 +195,13 @@ var _ = Describe("Grafana Controller", func() {
 			Expect(grafanaOperated.OwnerReferences[0].Name).To(Equal(resourceName))
 			By("Checking the cluster role binding")
 			clusterRoleBinding := &rbacv1.ClusterRoleBinding{}
-			err = k8sClient.Get(ctx, types.NamespacedName{
-				Name: grafanaOperated.Name + "-cluster-monitoring-view",
-			}, clusterRoleBinding)
-			Expect(err).NotTo(HaveOccurred())
+			Eventually(func(g Gomega) error {
+				err := k8sClient.Get(ctx, types.NamespacedName{
+					Name: grafanaOperated.Name + "-cluster-monitoring-view",
+				}, clusterRoleBinding)
+				g.Expect(err).NotTo(HaveOccurred())
+				return nil
+			}).Should(Succeed())
 			Expect(clusterRoleBinding.Subjects).To(HaveLen(1))
 			Expect(clusterRoleBinding.Subjects[0].Name).To(Equal(grafanaOperated.Name + "-sa"))
 			Expect(clusterRoleBinding.Subjects[0].Kind).To(Equal("ServiceAccount"))
@@ -311,29 +212,22 @@ var _ = Describe("Grafana Controller", func() {
 			Expect(clusterRoleBinding.RoleRef.APIGroup).To(Equal("rbac.authorization.k8s.io"))
 		})
 		// status
+
 		It("should successfully update the status of the resource", func() {
 			By("Reconciling the created resource")
-			// get the resource
-			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
-			Expect(k8sClient.Update(ctx, grafana)).To(Succeed())
-
-			controllerReconciler := &GrafanaReconciler{
-				Client:    k8sClient,
-				Scheme:    k8sClient.Scheme(),
-				Clientset: clientSet,
-				Dynamic:   dynamicClient,
-			}
-
-			_, err := controllerReconciler.Reconcile(ctx, reconcile.Request{
-				NamespacedName: typeNamespacedName,
-			})
-			Expect(err).NotTo(HaveOccurred())
-			Expect(k8sClient.Get(ctx, typeNamespacedName, grafana)).To(Succeed())
+			// get the resource expect status to be unknown
+			Eventually(func(g Gomega) error {
+				err := k8sClient.Get(ctx, typeNamespacedName, grafana)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(grafana.Status).NotTo(BeNil())
+				g.Expect(grafana.Status.Conditions).To(HaveLen(4))
+				return nil
+			}, time.Minute, time.Second).Should(Succeed())
 			Expect(grafana.Status).NotTo(BeNil())
-			Expect(grafana.Status.TokenExpirationTime).NotTo(BeNil())
-			Expect(grafana.Status.TokenExpirationTime.Time).NotTo(BeNil())
-			Expect(grafana.Status.TokenExpirationTime.Time).NotTo(BeZero())
-
+			// Check the conditions
+			Expect(grafana.Status.Conditions[0].Type).To(Equal(typeAvailable))
+			Expect(grafana.Status.Conditions[0].Status).To(Equal(metav1.ConditionTrue))
 		})
+
 	})
 })

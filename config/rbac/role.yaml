@@ -156,6 +156,22 @@ rules:
   - patch
   - update
 - apiGroups:
+  - logging.openshift.io
+  resources:
+  - clusterloggings
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - logging.openshift.io
+  resources:
+  - clusterloggings/status
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - loki.grafana.com
   resourceNames:
   - logs

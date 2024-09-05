@@ -78,6 +78,8 @@ type GrafanaReconciler struct {
 // +kubebuilder:rbac:groups=authorization.k8s.io,resources=tokenreviews,verbs=create
 // +kubebuilder:rbac:groups=tempo.grafana.com,resources=dev,resourceNames=traces,verbs=get
 // +kubebuilder:rbac:groups=tempo.grafana.com,resources=prod,resourceNames=traces,verbs=get
+// +kubebuilder:rbac:groups=logging.openshift.io,resources=clusterloggings,verbs=get;list;watch
+// +kubebuilder:rbac:groups=logging.openshift.io,resources=clusterloggings/status,verbs=get;list;watch
 
 func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)

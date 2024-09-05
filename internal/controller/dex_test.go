@@ -6,6 +6,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	appsv1 "k8s.io/api/apps/v1"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
@@ -168,7 +169,41 @@ var _ = Describe("Dex", func() {
 				return nil
 			}, time.Minute, time.Second).Should(Succeed())
 			Expect(tr.Status.Authenticated).To(BeTrue())
-
+		})
+		It("Dhould create a deployment and update the sha when the secret is changed", func() {
+			firstDeployment := &appsv1.Deployment{}
+			By("Getting the deployment")
+			deploymentTypeNamespacedName := types.NamespacedName{
+				Name:      fmt.Sprintf("%s-dex", resourceName),
+				Namespace: "default",
+			}
+			Eventually(func(g Gomega) error {
+				err := k8sClient.Get(ctx, deploymentTypeNamespacedName, firstDeployment)
+				g.Expect(err).NotTo(HaveOccurred())
+				return nil
+			}, time.Minute, time.Second).Should(Succeed())
+			By("checking the sha")
+			Expect(firstDeployment.Spec.Template.Spec.Containers).To(HaveLen(1))
+			Expect(firstDeployment.Spec.Template.ObjectMeta.Annotations).To(HaveKey("checksum/config.yaml"))
+			firstSha := firstDeployment.Spec.Template.ObjectMeta.Annotations["checksum/config.yaml"]
+			By("Deleting the secret")
+			secret := &corev1.Secret{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      fmt.Sprintf("%s-dex-token", resourceName),
+					Namespace: "default",
+				},
+			}
+			err := k8sClient.Delete(ctx, secret)
+			Expect(err).NotTo(HaveOccurred())
+			By("Getting the deployment again")
+			secondDeployment := &appsv1.Deployment{}
+			Eventually(func(g Gomega) error {
+				err := k8sClient.Get(ctx, deploymentTypeNamespacedName, secondDeployment)
+				g.Expect(err).NotTo(HaveOccurred())
+				secondSha := secondDeployment.Spec.Template.ObjectMeta.Annotations["checksum/config.yaml"]
+				g.Expect(firstSha).NotTo(Equal(secondSha))
+				return nil
+			}, time.Minute, time.Second).Should(Succeed())
 		})
 	})
 })

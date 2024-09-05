@@ -17,6 +17,8 @@ limitations under the License.
 package v1alpha1
 
 import (
+	"context"
+
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
@@ -40,10 +42,10 @@ func (r *Grafana) SetupWebhookWithManager(mgr ctrl.Manager) error {
 
 //+kubebuilder:webhook:path=/mutate-grafoo-cloudmonkey-org-v1alpha1-grafana,mutating=true,failurePolicy=fail,sideEffects=None,groups=grafoo.cloudmonkey.org,resources=grafanas,verbs=create;update,versions=v1alpha1,name=mgrafana.kb.io,admissionReviewVersions=v1
 
-var _ webhook.Defaulter = &Grafana{}
+var _ webhook.CustomDefaulter = &Grafana{}
 
 // Default implements webhook.Defaulter so a webhook will be registered for the type
-func (r *Grafana) Default() {
+func (r *Grafana) Default(ctx context.Context, obj runtime.Object) error {
 	grafanalog.Info("default", "name", r.Name)
 	//if r.Spec.Version == "" {
 	//	r.Spec.Version = GrafanaVersion
@@ -70,6 +72,8 @@ func (r *Grafana) Default() {
 	if len(r.Spec.DataSources) == 0 {
 		r.Spec.DataSources = DataSources
 	}
+	// check if datasources are updated in the spec
+	return nil
 }
 
 // TODO(user): change verbs to "verbs=create;update;delete" if you want to enable deletion validation.

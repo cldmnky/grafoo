@@ -162,7 +162,7 @@ web:
 			},
 		}
 		// Get the sha for the secret
-		configSha = sha256ForSecret(dexSecret.StringData["config.yaml"])
+		configSha = sha256ForSecret(dexConfig["config.yaml"])
 
 		op, err := CreateOrUpdateWithRetries(ctx, r.Client, dexSecret, func() error {
 			dexSecret.Labels = r.generateLabelsForComponent(instance, "dex")

@@ -1,4 +1,5 @@
-![alt text](assets/grafoo.png)
+![image](https://github.com/user-attachments/assets/5132a329-e10c-470c-8554-7df027f27c83)
+
 
 *Grafana for OpenShift Observability* - Configure Grafana for use in OpenShift!
 

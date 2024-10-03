@@ -47,9 +47,9 @@ var _ webhook.CustomDefaulter = &Grafana{}
 // Default implements webhook.Defaulter so a webhook will be registered for the type
 func (r *Grafana) Default(ctx context.Context, obj runtime.Object) error {
 	grafanalog.Info("default", "name", r.Name)
-	//if r.Spec.Version == "" {
-	//	r.Spec.Version = GrafanaVersion
-	//}
+	if r.Spec.Version == "" {
+		r.Spec.Version = GrafanaVersion
+	}
 	if r.Spec.Dex == nil {
 		r.Spec.Dex = &Dex{
 			Enabled: true,

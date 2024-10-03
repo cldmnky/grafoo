@@ -221,7 +221,7 @@ SEMVER ?= $(LOCALBIN)/semver
 CRDOC ?= $(LOCALBIN)/crd-ref-docs
 
 ## Tool Versions
-KUSTOMIZE_VERSION ?= v5.2.1
+KUSTOMIZE_VERSION ?= v5.4.3
 CONTROLLER_TOOLS_VERSION ?= v0.14.0
 
 .PHONY: crdoc

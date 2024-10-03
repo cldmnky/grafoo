@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	grafoov1alpha1 "github.com/cldmnky/grafoo/api/v1alpha1"
+	"github.com/cldmnky/grafoo/internal/config"
 	"github.com/cldmnky/grafoo/internal/controller"
 )
 
@@ -77,6 +78,12 @@ func main() {
 		"If set, HTTP/2 will be enabled for the metrics and webhook servers")
 	// Print version flag
 	flag.BoolVar(&showVersion, "version", false, "Show version and exit")
+
+	// Image overrides
+	flag.StringVar(&config.DexImage, "dex-image", lookupEnvOrDefault("RELATED_IMAGE_DEX", config.DexImage), "The image to use for the Dex container")
+	flag.StringVar(&config.GrafanaVersion, "grafana-version", lookupEnvOrDefault("GRAFANA_VERSION", config.GrafanaVersion), "The version of Grafana to use")
+	flag.StringVar(&config.MariaDBImage, "mariadb-image", lookupEnvOrDefault("RELATED_IMAGE_MARIADB", config.MariaDBImage), "The image to use for the MariaDB container")
+
 	opts := zap.Options{
 		Development: true,
 	}
@@ -84,6 +91,9 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	// Print related images
+	setupLog.Info("Related images", "dex", config.DexImage, "grafana", config.GrafanaVersion, "mariadb", config.MariaDBImage)
 
 	// Print version and exit
 	if showVersion {
@@ -185,4 +195,14 @@ func main() {
 		setupLog.Error(err, "problem running manager")
 		os.Exit(1)
 	}
+}
+
+// lookupEnvOrDefault returns the value of the environment variable named by the key
+// or the default value if the environment variable is not set.
+func lookupEnvOrDefault(key, defaultValue string) string {
+	value, ok := os.LookupEnv(key)
+	if !ok {
+		return defaultValue
+	}
+	return value
 }

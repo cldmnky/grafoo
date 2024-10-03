@@ -4,6 +4,8 @@ import (
 	"time"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	"github.com/cldmnky/grafoo/internal/config"
 )
 
 const (
@@ -15,15 +17,15 @@ const (
 )
 
 var (
-	DexImage           = "docker.io/dexidp/dex:v2.39.1-distroless"
-	GrafanaVersion     = "9.5.17"
+	DexImage           = config.DexImage
+	GrafanaVersion     = config.GrafanaVersion
 	TokenDuration      = metav1.Duration{Duration: 1440 * time.Minute}
 	GrafanaReplicas    = int32(2)
 	DexHttpPort        = int32(5555)
 	DexGrpcPort        = int32(5556)
 	DexMetricsPort     = int32(5557)
 	MariaDBStorageSize = "5Gi"
-	MariaDBImage       = "registry.access.redhat.com/rhel9/mariadb-1011:1-12"
+	MariaDBImage       = config.MariaDBImage
 	DataSources        = []DataSource{
 		{
 			Name:    "Prometheus",

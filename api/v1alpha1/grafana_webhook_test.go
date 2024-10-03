@@ -1,8 +1,6 @@
 package v1alpha1
 
 import (
-	"context"
-
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -16,7 +14,9 @@ var _ = Describe("Grafana Webhook", func() {
 					Dex:     nil,
 				},
 			}
-			g.Default(context.Background(), g)
+			d := &GrafooCustomDefaulter{}
+			err := d.Default(ctx, g)
+			Expect(err).To(BeNil())
 			Expect(g.Spec.Version).To(Equal(GrafanaVersion))
 			Expect(g.Spec.Dex).ToNot(BeNil())
 			Expect(g.Spec.Dex.Enabled).To(BeTrue())

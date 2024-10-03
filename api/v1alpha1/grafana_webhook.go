@@ -35,42 +35,45 @@ var grafanalog = logf.Log.WithName("grafana-resource")
 func (r *Grafana) SetupWebhookWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewWebhookManagedBy(mgr).
 		For(r).
+		WithDefaulter(&GrafooCustomDefaulter{}).
 		Complete()
 }
 
-// TODO(user): EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-
 //+kubebuilder:webhook:path=/mutate-grafoo-cloudmonkey-org-v1alpha1-grafana,mutating=true,failurePolicy=fail,sideEffects=None,groups=grafoo.cloudmonkey.org,resources=grafanas,verbs=create;update,versions=v1alpha1,name=mgrafana.kb.io,admissionReviewVersions=v1
 
-var _ webhook.CustomDefaulter = &Grafana{}
+type GrafooCustomDefaulter struct {
+}
+
+var _ webhook.CustomDefaulter = &GrafooCustomDefaulter{}
 
 // Default implements webhook.Defaulter so a webhook will be registered for the type
-func (r *Grafana) Default(ctx context.Context, obj runtime.Object) error {
-	grafanalog.Info("default", "name", r.Name)
-	if r.Spec.Version == "" {
-		r.Spec.Version = GrafanaVersion
+func (r *GrafooCustomDefaulter) Default(ctx context.Context, obj runtime.Object) error {
+	grafoo := obj.(*Grafana)
+	grafanalog.Info("default", "name", grafoo.Name)
+	if grafoo.Spec.Version == "" {
+		grafoo.Spec.Version = GrafanaVersion
 	}
-	if r.Spec.Dex == nil {
-		r.Spec.Dex = &Dex{
+	if grafoo.Spec.Dex == nil {
+		grafoo.Spec.Dex = &Dex{
 			Enabled: true,
 			Image:   DexImage,
 		}
 	}
 	// mariadb
-	if r.Spec.MariaDB == nil {
-		r.Spec.MariaDB = &MariaDB{
+	if grafoo.Spec.MariaDB == nil {
+		grafoo.Spec.MariaDB = &MariaDB{
 			Enabled:     true,
 			StorageSize: MariaDBStorageSize,
 			Image:       MariaDBImage,
 		}
 	}
 	// replicas
-	if r.Spec.Replicas == nil {
-		r.Spec.Replicas = &GrafanaReplicas
+	if grafoo.Spec.Replicas == nil {
+		grafoo.Spec.Replicas = &GrafanaReplicas
 	}
 	// datasources
-	if len(r.Spec.DataSources) == 0 {
-		r.Spec.DataSources = DataSources
+	if len(grafoo.Spec.DataSources) == 0 {
+		grafoo.Spec.DataSources = DataSources
 	}
 	// check if datasources are updated in the spec
 	return nil

@@ -41,42 +41,60 @@ spec:
             description: GrafanaSpec defines the desired state of Grafana
             properties:
               datasources:
+                description: DataSources is the configuration for the DataSources
                 items:
                   properties:
                     enabled:
                       type: boolean
                     loki:
+                      description: Loki is the configuration for the Loki DataSource
                       properties:
                         lokiStack:
                           properties:
                             name:
+                              description: Name is the name of the Loki Stack
                               type: string
                             namespace:
+                              description: Namespace is the namespace of the Loki
+                                Stack
                               type: string
                           type: object
                         url:
+                          description: URL is the URL for the Loki DataSource
                           type: string
                       type: object
                     name:
+                      description: Name is the name of the DataSource
                       type: string
                     prometheus:
+                      description: Prometheus is the configuration for the Prometheus
+                        DataSource
                       properties:
                         url:
+                          description: URL is the URL for the Prometheus DataSource
                           type: string
                       type: object
                     tempo:
+                      description: Tempo is the configuration for the Tempo DataSource
                       properties:
                         tempoStack:
+                          description: TempoStack is the configuration for the Tempo
+                            Stack
                           properties:
                             name:
+                              description: Name is the name of the Tempo Stack
                               type: string
                             namespace:
+                              description: Namespace is the namespace of the Tempo
+                                Stack
                               type: string
                           type: object
                         url:
+                          description: URL is the URL for the Tempo DataSource
                           type: string
                       type: object
                     type:
+                      description: DataSourceType defines the type of the data source
                       enum:
                       - prometheus-incluster
                       - loki-incluster
@@ -85,10 +103,14 @@ spec:
                   type: object
                 type: array
               dex:
+                description: Dex is the configuration for the Dex OIDC provider
                 properties:
                   enabled:
+                    description: Enabled is a flag to enable or disable the Dex OIDC
+                      provider
                     type: boolean
                   image:
+                    description: Image is the image to use for the Dex OIDC provider
                     type: string
                 type: object
               domain:
@@ -98,33 +120,120 @@ spec:
                 pattern: ^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$
                 type: string
               mariadb:
+                description: MariaDB is the configuration for the MariaDB database
                 properties:
                   enabled:
+                    description: Enabled is a flag to enable or disable the MariaDB
+                      database
                     type: boolean
                   image:
+                    description: Image is the image to use for the MariaDB database
                     type: string
                   storageSize:
+                    description: StorageSize is the size of the storage for the MariaDB
+                      database
                     type: string
                 type: object
               replicas:
+                default: 2
+                description: Replicas is the number of replicas for the Grafana deployment
                 format: int32
+                maximum: 10
+                minimum: 1
                 type: integer
               tokenDuration:
-                default: 1440m0s
-                pattern: ^([0-9]+(\.[0-9]+)?(s|m|h))+$
+                default: 1440m
+                description: |-
+                  TokenDuration is the duration of the token used for authentication
+                  The token is used to authenticate for Dex and for the DataSources
+                pattern: ^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$
                 type: string
               version:
+                default: 9.5.17
+                description: Version is the version of Grafana to deploy
+                pattern: ^([0-9]+(\.[0-9]+){0,2})$
                 type: string
             type: object
           status:
             description: GrafanaStatus defines the observed state of Grafana
             properties:
+              conditions:
+                items:
+                  description: "Condition contains details for one aspect of the current
+                    state of this API Resource.\n---\nThis struct is intended for
+                    direct use as an array at the field path .status.conditions.  For
+                    example,\n\n\n\ttype FooStatus struct{\n\t    // Represents the
+                    observations of a foo's current state.\n\t    // Known .status.conditions.type
+                    are: \"Available\", \"Progressing\", and \"Degraded\"\n\t    //
+                    +patchMergeKey=type\n\t    // +patchStrategy=merge\n\t    // +listType=map\n\t
+                    \   // +listMapKey=type\n\t    Conditions []metav1.Condition `json:\"conditions,omitempty\"
+                    patchStrategy:\"merge\" patchMergeKey:\"type\" protobuf:\"bytes,1,rep,name=conditions\"`\n\n\n\t
+                    \   // other fields\n\t}"
+                  properties:
+                    lastTransitionTime:
+                      description: |-
+                        lastTransitionTime is the last time the condition transitioned from one status to another.
+                        This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.
+                      format: date-time
+                      type: string
+                    message:
+                      description: |-
+                        message is a human readable message indicating details about the transition.
+                        This may be an empty string.
+                      maxLength: 32768
+                      type: string
+                    observedGeneration:
+                      description: |-
+                        observedGeneration represents the .metadata.generation that the condition was set based upon.
+                        For instance, if .metadata.generation is currently 12, but the .status.conditions[x].observedGeneration is 9, the condition is out of date
+                        with respect to the current state of the instance.
+                      format: int64
+                      minimum: 0
+                      type: integer
+                    reason:
+                      description: |-
+                        reason contains a programmatic identifier indicating the reason for the condition's last transition.
+                        Producers of specific condition types may define expected values and meanings for this field,
+                        and whether the values are considered a guaranteed API.
+                        The value should be a CamelCase string.
+                        This field may not be empty.
+                      maxLength: 1024
+                      minLength: 1
+                      pattern: ^[A-Za-z]([A-Za-z0-9_,:]*[A-Za-z0-9_])?$
+                      type: string
+                    status:
+                      description: status of the condition, one of True, False, Unknown.
+                      enum:
+                      - "True"
+                      - "False"
+                      - Unknown
+                      type: string
+                    type:
+                      description: |-
+                        type of condition in CamelCase or in foo.example.com/CamelCase.
+                        ---
+                        Many .condition.type values are consistent across resources like Available, but because arbitrary conditions can be
+                        useful (see .node.status.conditions), the ability to deconflict is important.
+                        The regex it matches is (dns1123SubdomainFmt/)?(qualifiedNameFmt)
+                      maxLength: 316
+                      pattern: ^([a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*/)?(([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])$
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - reason
+                  - status
+                  - type
+                  type: object
+                type: array
               phase:
                 type: string
               tokenExpirationTime:
                 description: TokenExpirationTime is the time when the token will expire
                 format: date-time
                 type: string
+            required:
+            - conditions
             type: object
         type: object
     served: true

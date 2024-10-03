@@ -5,4 +5,4 @@ kind: Kustomization
 images:
 - name: controller
   newName: quay.io/cldmnky/grafoo
-  newTag: latest
+  newTag: 0.1.1

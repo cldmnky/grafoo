@@ -21,7 +21,7 @@ metadata:
         }
       ]
     capabilities: Basic Install
-    createdAt: "2024-06-16T21:40:23Z"
+    createdAt: "2024-10-03T16:13:01Z"
     operators.operatorframework.io/builder: operator-sdk-v1.34.2
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
   name: grafoo.v0.1.1
@@ -34,6 +34,16 @@ spec:
       displayName: Grafana
       kind: Grafana
       name: grafanas.grafoo.cloudmonkey.org
+      specDescriptors:
+      - displayName: DataSource type
+        path: datasources[0].type
+        x-descriptors:
+        - urn:alm:descriptor:com.tectonic.ui:select:tempo-incluster
+        - urn:alm:descriptor:com.tectonic.ui:select:loki-incluster
+        - urn:alm:descriptor:com.tectonic.ui:select:prometheus-incluster
+      statusDescriptors:
+      - displayName: Conditions
+        path: conditions
       version: v1alpha1
   description: grafoo deploys Grafana in OpenShift and manages datasources that connects
     to the in-cluster monitoring and loki logging stack
@@ -197,6 +207,22 @@ spec:
           - patch
           - update
         - apiGroups:
+          - logging.openshift.io
+          resources:
+          - clusterloggings
+          verbs:
+          - get
+          - list
+          - watch
+        - apiGroups:
+          - logging.openshift.io
+          resources:
+          - clusterloggings/status
+          verbs:
+          - get
+          - list
+          - watch
+        - apiGroups:
           - loki.grafana.com
           resourceNames:
           - logs
@@ -313,7 +339,7 @@ spec:
                 - --leader-elect
                 command:
                 - /ko-app/grafoo
-                image: quay.io/cldmnky/grafoo:latest
+                image: quay.io/cldmnky/grafoo:0.1.1
                 livenessProbe:
                   httpGet:
                     path: /healthz

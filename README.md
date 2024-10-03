@@ -1,4 +1,4 @@
-![Frafoo](assets/grafoo-round-small.png)
+![Frafoo](assets/grafoo-logo-small.png)
 
 
 *Grafana for OpenShift Observability* - Configure Grafana for use in OpenShift!

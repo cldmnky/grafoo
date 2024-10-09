@@ -27,8 +27,6 @@ With this feature, teams can achieve consistent observability across various clu
 
 ## Deploying
 
-## Deployment Options
-
 `grafoo` is available through a **custom operator catalog** (catalog details will be announced soon). This makes deployment and updates easy through the OperatorHub or OpenShift Console, ensuring that you always have the latest version of `grafoo`.
 
 Alternatively, you can deploy `grafoo` manually by following these steps:

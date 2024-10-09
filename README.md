@@ -27,9 +27,61 @@ With this feature, teams can achieve consistent observability across various clu
 
 ## Deploying
 
-`grafoo` is available in a custom operator catalog (TBA).
+## Deployment Options
 
-It may also be deployed by cloning this repo, creating a `grafoo-system` project and then `make install && make deploy`.
+`grafoo` is available through a **custom operator catalog** (catalog details will be announced soon). This makes deployment and updates easy through the OperatorHub or OpenShift Console, ensuring that you always have the latest version of `grafoo`.
+
+Alternatively, you can deploy `grafoo` manually by following these steps:
+
+### Manual Deployment
+
+1. **Clone the repository**:
+   Begin by cloning the `grafoo` repository to your local machine:
+   ```bash
+   git clone https://github.com/yourorg/grafoo.git
+   cd grafoo
+   ```
+
+2. **Create the `grafoo-system` project**:
+   In OpenShift, create a namespace (or project) where `grafoo` will be deployed:
+   ```bash
+   oc new-project grafoo-system
+   ```
+
+3. **Install and deploy `grafoo`**:
+   Once inside the `grafoo` repository, use the provided Makefile to install and deploy the necessary resources:
+   ```bash
+   make install
+   make deploy
+   ```
+
+### Building and Pushing Images Using the Makefile
+
+If you're making changes to `grafoo` or want to build your own images, you can leverage the `Makefile` to simplify the process of building and pushing Docker images. Here are the relevant steps:
+
+1. **Build the Docker image**:
+   The following command will build a Docker image for `grafoo`:
+   ```bash
+   make docker-build
+   ```
+   This command compiles the necessary code, packages it into a Docker image, and prepares it for deployment.
+
+2. **Push the image to a registry**:
+   Once the image is built, you can push it to a container registry (such as Docker Hub, Quay.io, or an internal registry) using the following command:
+   ```bash
+   make docker-push
+   ```
+   Before running this command, ensure that the `IMAGE_TAG_BASE` variable is set to your target registry and repository:
+   ```bash
+   export IMAGE_TAG_BASE=<your-registry>/<your-repo>/grafoo
+   ```
+
+3. **Run the image locally (optional)**:
+   If you wish to test your image locally without pushing it to a registry, you can use the following command to run it directly on your machine:
+   ```bash
+   make run
+   ```
+
 
 To deploy a grafoo managed grafana after the prerequisites and the `grafoo`operator has been deployed, simply apply a *CRD* that looks like:
 

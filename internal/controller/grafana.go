@@ -16,44 +16,115 @@ import (
 )
 
 func (r *GrafanaReconciler) ReconcileGrafana(ctx context.Context, instance *grafoov1alpha1.Grafana) error {
-	operatedGrafana := &grafanav1beta1.Grafana{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      instance.Name,
-			Namespace: instance.Namespace,
-		},
-	}
-	// TODO: if not dex enabled
+	// Get client secret
 	clientSecret, err := r.getClientSecret(ctx, instance)
 	if err != nil {
 		return err
 	}
 
-	// dexRouteDomain is dex route uri
-	grafanaRouteUri := r.generateRouteUriForComponent(ctx, instance, "grafana")
-	u, err := url.Parse(grafanaRouteUri)
+	// Get database configuration
+	databaseConfig, err := r.getDatabaseConfig(ctx, instance)
 	if err != nil {
 		return err
 	}
-	grafanaRouteDomain := u.Hostname()
-	var databaseConfig map[string]string
-	if instance.Spec.MariaDB.Enabled {
-		// Get the mariadb secret
-		mariadbSecret := &corev1.Secret{}
-		if err := r.Get(ctx, client.ObjectKey{Name: r.generateNameForComponent(instance, "mariadb"), Namespace: instance.Namespace}, mariadbSecret); err != nil {
-			return err
-		}
-		mariaDBUrl := fmt.Sprintf("mysql://%s:%s@%s:3306/%s", string(mariadbSecret.Data["database-user"]), string(mariadbSecret.Data["database-password"]), r.generateNameForComponent(instance, "mariadb"), string(mariadbSecret.Data["database-name"]))
-		databaseConfig = map[string]string{
-			"type": "mysql",
-			"url":  mariaDBUrl,
-		}
-	} else {
-		databaseConfig = map[string]string{
-			"type": "sqlite3",
-		}
+
+	// Build GrafanaSpec
+	grafanaSpec, err := r.buildGrafanaSpec(ctx, instance, clientSecret, databaseConfig)
+	if err != nil {
+		return err
 	}
 
-	grafanaSpec := grafanav1beta1.GrafanaSpec{
+	// Create or update Grafana resource
+	if err := r.createOrUpdateGrafanaResource(ctx, instance, grafanaSpec); err != nil {
+		return err
+	}
+
+	// Define subjects for ClusterRoleBindings
+	subjects := []rbacv1.Subject{
+		{
+			Kind:      "ServiceAccount",
+			Name:      r.generateNameForComponent(instance, "sa"),
+			Namespace: instance.Namespace,
+		},
+	}
+
+	// Create ClusterRoles and ClusterRoleBindings
+	if err := r.createAuthReviewerResources(ctx, instance, subjects); err != nil {
+		return err
+	}
+
+	if err := r.createTempoStackResources(ctx, instance, subjects); err != nil {
+		return err
+	}
+
+	if err := r.createMonitoringViewBinding(ctx, instance, subjects); err != nil {
+		return err
+	}
+
+	if err := r.createLoggingBindings(ctx, instance, subjects); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+// getDatabaseConfig retrieves the database configuration for a Grafana instance.
+// If MariaDB is enabled in the Grafana spec, it fetches the MariaDB credentials from a Kubernetes Secret
+// and constructs a MySQL connection URL. Otherwise, it defaults to using SQLite3.
+//
+// Parameters:
+// - ctx: The context for the request.
+// - instance: The Grafana instance for which the database configuration is being retrieved.
+//
+// Returns:
+// - A map containing the database type and connection URL (if applicable).
+// - An error if there is an issue retrieving the MariaDB credentials.
+func (r *GrafanaReconciler) getDatabaseConfig(ctx context.Context, instance *grafoov1alpha1.Grafana) (map[string]string, error) {
+	if instance.Spec.MariaDB.Enabled {
+		mariadbSecret := &corev1.Secret{}
+		if err := r.Get(ctx, client.ObjectKey{Name: r.generateNameForComponent(instance, "mariadb"), Namespace: instance.Namespace}, mariadbSecret); err != nil {
+			return nil, err
+		}
+		mariaDBURL := fmt.Sprintf("mysql://%s:%s@%s:3306/%s",
+			string(mariadbSecret.Data["database-user"]),
+			string(mariadbSecret.Data["database-password"]),
+			r.generateNameForComponent(instance, "mariadb"),
+			string(mariadbSecret.Data["database-name"]),
+		)
+		return map[string]string{
+			"type": "mysql",
+			"url":  mariaDBURL,
+		}, nil
+	}
+	return map[string]string{
+		"type": "sqlite3",
+	}, nil
+}
+
+// buildGrafanaSpec constructs the GrafanaSpec for a Grafana instance.
+// It generates the route URI for the Grafana component, parses it to extract the domain,
+// and configures various settings including server, log, authentication, and database configurations.
+//
+// Parameters:
+//
+//	ctx - The context for the request.
+//	instance - The Grafana instance for which the spec is being built.
+//	clientSecret - The client secret for OAuth authentication.
+//	databaseConfig - A map containing database configuration settings.
+//
+// Returns:
+//
+//	grafanav1beta1.GrafanaSpec - The constructed Grafana specification.
+//	error - An error if any occurred during the construction of the spec.
+func (r *GrafanaReconciler) buildGrafanaSpec(ctx context.Context, instance *grafoov1alpha1.Grafana, clientSecret string, databaseConfig map[string]string) (grafanav1beta1.GrafanaSpec, error) {
+	grafanaRouteURI := r.generateRouteUriForComponent(ctx, instance, "grafana")
+	u, err := url.Parse(grafanaRouteURI)
+	if err != nil {
+		return grafanav1beta1.GrafanaSpec{}, err
+	}
+	grafanaRouteDomain := u.Hostname()
+
+	return grafanav1beta1.GrafanaSpec{
 		Version: instance.Spec.Version,
 		Deployment: &grafanav1beta1.DeploymentV1{
 			Spec: grafanav1beta1.DeploymentV1Spec{
@@ -67,7 +138,7 @@ func (r *GrafanaReconciler) ReconcileGrafana(ctx context.Context, instance *graf
 		},
 		Config: map[string]map[string]string{
 			"server": {
-				"root_url": r.generateRouteUriForComponent(ctx, instance, "grafana"),
+				"root_url": grafanaRouteURI,
 			},
 			"log": {
 				"mode":  "console",
@@ -91,74 +162,42 @@ func (r *GrafanaReconciler) ReconcileGrafana(ctx context.Context, instance *graf
 			},
 			"database": databaseConfig,
 		},
-	}
+	}, nil
+}
 
-	_, err = CreateOrUpdateWithRetries(ctx, r.Client, operatedGrafana, func() error {
+func (r *GrafanaReconciler) createOrUpdateGrafanaResource(ctx context.Context, instance *grafoov1alpha1.Grafana, grafanaSpec grafanav1beta1.GrafanaSpec) error {
+	operatedGrafana := &grafanav1beta1.Grafana{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      instance.Name,
+			Namespace: instance.Namespace,
+		},
+	}
+	_, err := CreateOrUpdateWithRetries(ctx, r.Client, operatedGrafana, func() error {
 		operatedGrafana.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
 		operatedGrafana.Spec = grafanaSpec
 		return ctrl.SetControllerReference(instance, operatedGrafana, r.Scheme)
 	})
-	if err != nil {
-		return err
-	}
-	// Create a clusterrole for the grafana service account that allows subjectaccessreviews
-	grafanaClusterRole := &rbacv1.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: r.generateNameForComponent(instance, "auth-reviewer"),
-		},
-	}
-	grafanaClusterRoleRules := []rbacv1.PolicyRule{
+	return err
+}
+
+func (r *GrafanaReconciler) createAuthReviewerResources(ctx context.Context, instance *grafoov1alpha1.Grafana, subjects []rbacv1.Subject) error {
+	roleName := r.generateNameForComponent(instance, "auth-reviewer")
+	rules := []rbacv1.PolicyRule{
 		{
 			APIGroups: []string{"authorization.k8s.io"},
-			Resources: []string{"subjectaccessreviews"},
-			Verbs:     []string{"create"},
-		},
-		{
-			APIGroups: []string{"authorization.k8s.io"},
-			Resources: []string{"tokenreviews"},
+			Resources: []string{"subjectaccessreviews", "tokenreviews"},
 			Verbs:     []string{"create"},
 		},
 	}
-	_, err = CreateOrUpdateWithRetries(ctx, r.Client, grafanaClusterRole, func() error {
-		grafanaClusterRole.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
-		grafanaClusterRole.Rules = grafanaClusterRoleRules
-		return nil
-	})
-	if err != nil {
+	if err := r.createClusterRole(ctx, instance, roleName, rules); err != nil {
 		return err
 	}
-	// Create a clusterrolebinging for the auth-reviewer clusterrole
-	grafanaClusterRoleBinding := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: r.generateNameForComponent(instance, "auth-reviewer"),
-		},
-	}
-	_, err = CreateOrUpdateWithRetries(ctx, r.Client, grafanaClusterRoleBinding, func() error {
-		grafanaClusterRoleBinding.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
-		grafanaClusterRoleBinding.Subjects = []rbacv1.Subject{
-			{
-				Kind:      "ServiceAccount",
-				Name:      r.generateNameForComponent(instance, "sa"),
-				Namespace: instance.Namespace,
-			},
-		}
-		grafanaClusterRoleBinding.RoleRef = rbacv1.RoleRef{
-			Kind:     "ClusterRole",
-			Name:     r.generateNameForComponent(instance, "auth-reviewer"),
-			APIGroup: "rbac.authorization.k8s.io",
-		}
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-	// Create a clusterrole for the grafana service account that allows tempostack reads
-	grafanaTempoClusterRole := &rbacv1.ClusterRole{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: r.generateNameForComponent(instance, "tempostack-traces-reader"),
-		},
-	}
-	grafanaTempoClusterRoleRules := []rbacv1.PolicyRule{
+	return r.createClusterRoleBinding(ctx, instance, roleName, roleName, subjects)
+}
+
+func (r *GrafanaReconciler) createTempoStackResources(ctx context.Context, instance *grafoov1alpha1.Grafana, subjects []rbacv1.Subject) error {
+	roleName := r.generateNameForComponent(instance, "tempostack-traces-reader")
+	rules := []rbacv1.PolicyRule{
 		{
 			APIGroups:     []string{"tempo.grafana.com"},
 			Resources:     []string{"dev"},
@@ -166,152 +205,71 @@ func (r *GrafanaReconciler) ReconcileGrafana(ctx context.Context, instance *graf
 			Verbs:         []string{"get"},
 		},
 	}
-	_, err = CreateOrUpdateWithRetries(ctx, r.Client, grafanaTempoClusterRole, func() error {
-		grafanaTempoClusterRole.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
-		grafanaTempoClusterRole.Rules = grafanaTempoClusterRoleRules
-		return nil
-	})
-	if err != nil {
+	if err := r.createClusterRole(ctx, instance, roleName, rules); err != nil {
 		return err
 	}
-	// Create a clusterrolebinding for the tempostack-traces-reader clusterrole
-	grafanaTempoClusterRoleBinding := &rbacv1.ClusterRoleBinding{
+	return r.createClusterRoleBinding(ctx, instance, roleName, roleName, subjects)
+}
+
+func (r *GrafanaReconciler) createMonitoringViewBinding(ctx context.Context, instance *grafoov1alpha1.Grafana, subjects []rbacv1.Subject) error {
+	bindingName := r.generateNameForComponent(instance, "cluster-monitoring-view")
+	return r.createClusterRoleBinding(ctx, instance, bindingName, "cluster-monitoring-view", subjects)
+}
+
+func (r *GrafanaReconciler) createLoggingBindings(ctx context.Context, instance *grafoov1alpha1.Grafana, subjects []rbacv1.Subject) error {
+	clusterRoles := []string{
+		"cluster-logging-application-view",
+		"cluster-logging-infrastructure-view",
+		"cluster-logging-audit-view",
+	}
+
+	for _, roleName := range clusterRoles {
+		bindingName := r.generateNameForComponent(instance, roleName)
+		if err := r.createClusterRoleBindingIfRoleExists(ctx, instance, roleName, bindingName, subjects); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (r *GrafanaReconciler) createClusterRole(ctx context.Context, instance *grafoov1alpha1.Grafana, name string, rules []rbacv1.PolicyRule) error {
+	clusterRole := &rbacv1.ClusterRole{
 		ObjectMeta: metav1.ObjectMeta{
-			Name: r.generateNameForComponent(instance, "tempostack-traces-reader"),
+			Name: name,
 		},
 	}
-	_, err = CreateOrUpdateWithRetries(ctx, r.Client, grafanaTempoClusterRoleBinding, func() error {
-		grafanaTempoClusterRoleBinding.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
-		grafanaTempoClusterRoleBinding.Subjects = []rbacv1.Subject{
-			{
-				Kind:      "ServiceAccount",
-				Name:      r.generateNameForComponent(instance, "sa"),
-				Namespace: instance.Namespace,
-			},
-		}
-		grafanaTempoClusterRoleBinding.RoleRef = rbacv1.RoleRef{
+	_, err := CreateOrUpdateWithRetries(ctx, r.Client, clusterRole, func() error {
+		clusterRole.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
+		clusterRole.Rules = rules
+		return nil
+	})
+	return err
+}
+
+func (r *GrafanaReconciler) createClusterRoleBinding(ctx context.Context, instance *grafoov1alpha1.Grafana, name, roleName string, subjects []rbacv1.Subject) error {
+	clusterRoleBinding := &rbacv1.ClusterRoleBinding{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: name,
+		},
+	}
+	_, err := CreateOrUpdateWithRetries(ctx, r.Client, clusterRoleBinding, func() error {
+		clusterRoleBinding.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
+		clusterRoleBinding.Subjects = subjects
+		clusterRoleBinding.RoleRef = rbacv1.RoleRef{
 			Kind:     "ClusterRole",
-			Name:     r.generateNameForComponent(instance, "tempostack-traces-reader"),
+			Name:     roleName,
 			APIGroup: "rbac.authorization.k8s.io",
 		}
 		return nil
 	})
-	if err != nil {
-		return err
-	}
+	return err
+}
 
-	// Create a clusterrolebinding for the grafana service account
-	metricsClusterRoleBinding := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: r.generateNameForComponent(instance, "cluster-monitoring-view"),
-		},
-	}
-	_, err = CreateOrUpdateWithRetries(ctx, r.Client, metricsClusterRoleBinding, func() error {
-		metricsClusterRoleBinding.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
-		metricsClusterRoleBinding.Subjects = []rbacv1.Subject{
-			{
-				Kind:      "ServiceAccount",
-				Name:      r.generateNameForComponent(instance, "sa"),
-				Namespace: instance.Namespace,
-			},
-		}
-		metricsClusterRoleBinding.RoleRef = rbacv1.RoleRef{
-			Kind:     "ClusterRole",
-			Name:     "cluster-monitoring-view",
-			APIGroup: "rbac.authorization.k8s.io",
-		}
-		return nil
-	})
-	if err != nil {
-		return err
-	}
-
-	// Only create the cluster role bindings if the cluster roles exist
+func (r *GrafanaReconciler) createClusterRoleBindingIfRoleExists(ctx context.Context, instance *grafoov1alpha1.Grafana, roleName, bindingName string, subjects []rbacv1.Subject) error {
 	clusterRole := &rbacv1.ClusterRole{}
-	err = r.Get(ctx, client.ObjectKey{Name: "cluster-logging-application-view"}, clusterRole)
+	err := r.Get(ctx, client.ObjectKey{Name: roleName}, clusterRole)
 	if err == nil {
-
-		loggingAppClusterRoleBinding := &rbacv1.ClusterRoleBinding{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: r.generateNameForComponent(instance, "cluster-logging-application-view"),
-			},
-		}
-		_, err = CreateOrUpdateWithRetries(ctx, r.Client, loggingAppClusterRoleBinding, func() error {
-			loggingAppClusterRoleBinding.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
-			loggingAppClusterRoleBinding.Subjects = []rbacv1.Subject{
-				{
-					Kind:      "ServiceAccount",
-					Name:      r.generateNameForComponent(instance, "sa"),
-					Namespace: instance.Namespace,
-				},
-			}
-			loggingAppClusterRoleBinding.RoleRef = rbacv1.RoleRef{
-				Kind:     "ClusterRole",
-				Name:     "cluster-logging-application-view",
-				APIGroup: "rbac.authorization.k8s.io",
-			}
-			return nil
-		})
-		if err != nil {
-			return err
-		}
-	}
-
-	err = r.Get(ctx, client.ObjectKey{Name: "cluster-logging-infrastructure-view"}, clusterRole)
-	if err == nil {
-		loggingInfraClusterRoleBinding := &rbacv1.ClusterRoleBinding{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: r.generateNameForComponent(instance, "cluster-logging-infrastructure-view"),
-			},
-		}
-		_, err = CreateOrUpdateWithRetries(ctx, r.Client, loggingInfraClusterRoleBinding, func() error {
-			loggingInfraClusterRoleBinding.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
-			loggingInfraClusterRoleBinding.Subjects = []rbacv1.Subject{
-				{
-					Kind:      "ServiceAccount",
-					Name:      r.generateNameForComponent(instance, "sa"),
-					Namespace: instance.Namespace,
-				},
-			}
-			loggingInfraClusterRoleBinding.RoleRef = rbacv1.RoleRef{
-				Kind:     "ClusterRole",
-				Name:     "cluster-logging-infrastructure-view",
-				APIGroup: "rbac.authorization.k8s.io",
-			}
-			return nil
-		})
-		if err != nil {
-			return err
-		}
-	}
-
-	err = r.Get(ctx, client.ObjectKey{Name: "cluster-logging-audit-view"}, clusterRole)
-	if err == nil {
-		loggingAuditClusterRoleBinding := &rbacv1.ClusterRoleBinding{
-			ObjectMeta: metav1.ObjectMeta{
-				Name: r.generateNameForComponent(instance, "cluster-logging-audit-view"),
-			},
-		}
-		_, err = CreateOrUpdateWithRetries(ctx, r.Client, loggingAuditClusterRoleBinding, func() error {
-			loggingAuditClusterRoleBinding.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
-			loggingAuditClusterRoleBinding.Subjects = []rbacv1.Subject{
-				{
-					Kind:      "ServiceAccount",
-					Name:      r.generateNameForComponent(instance, "sa"),
-					Namespace: instance.Namespace,
-				},
-			}
-			loggingAuditClusterRoleBinding.RoleRef = rbacv1.RoleRef{
-				Kind:     "ClusterRole",
-				Name:     "cluster-logging-audit-view",
-				APIGroup: "rbac.authorization.k8s.io",
-			}
-			return nil
-		})
-		if err != nil {
-			return err
-		}
-		return nil
+		return r.createClusterRoleBinding(ctx, instance, bindingName, roleName, subjects)
 	}
 	return nil
 }

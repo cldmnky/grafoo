@@ -4,7 +4,13 @@
 
 *Grafana for OpenShift Observability* - Configure Grafana for use in OpenShift!
 
-`grafoo` deploys Grafana in OpenShift and manages datasources that connect to the in-cluster monitoring and Loki logging stack. This ensures seamless integration with OpenShift's observability tools, providing a unified monitoring and logging experience. In the future, `grafoo` will also support Multi-Cluster Observability in Advanced Cluster Management (ACM), enabling users to monitor and manage multiple clusters from a single Grafana instance. This feature will enhance the scalability and flexibility of observability across diverse and distributed environments.
+`grafoo` deploys **Grafana** in **OpenShift**, efficiently managing datasources that connect to both the in-cluster monitoring and **Loki** logging stack. This integration ensures a seamless observability experience, providing users with unified monitoring and logging capabilities directly within OpenShift.
+
+### Future Enhancements
+In upcoming releases, `grafoo` will extend its capabilities to support **Multi-Cluster Observability** in **Advanced Cluster Management (ACM)**. This enhancement will allow users to monitor and manage multiple clusters from a single Grafana instance, significantly improving scalability and flexibility across distributed environments.
+
+With this feature, teams can achieve consistent observability across various clusters, enabling centralized insights and proactive management of complex, multi-cluster infrastructures.
+
 
 ## Table of Contents
 1. [Requirements](#requirements)

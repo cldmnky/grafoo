@@ -174,7 +174,7 @@ func (r *GrafanaReconciler) ReconcileGrafana(ctx context.Context, instance *graf
 	if err != nil {
 		return err
 	}
-	// Create a clusterrolebinging for the tempostack-traces-reader clusterrole
+	// Create a clusterrolebinding for the tempostack-traces-reader clusterrole
 	grafanaTempoClusterRoleBinding := &rbacv1.ClusterRoleBinding{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: r.generateNameForComponent(instance, "tempostack-traces-reader"),
@@ -226,79 +226,92 @@ func (r *GrafanaReconciler) ReconcileGrafana(ctx context.Context, instance *graf
 		return err
 	}
 
-	loggingAppClusterRoleBinding := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: r.generateNameForComponent(instance, "cluster-logging-application-view"),
-		},
-	}
-	_, err = CreateOrUpdateWithRetries(ctx, r.Client, loggingAppClusterRoleBinding, func() error {
-		loggingAppClusterRoleBinding.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
-		loggingAppClusterRoleBinding.Subjects = []rbacv1.Subject{
-			{
-				Kind:      "ServiceAccount",
-				Name:      r.generateNameForComponent(instance, "sa"),
-				Namespace: instance.Namespace,
+	// Only create the cluster role bindings if the cluster roles exist
+	clusterRole := &rbacv1.ClusterRole{}
+	err = r.Get(ctx, client.ObjectKey{Name: "cluster-logging-application-view"}, clusterRole)
+	if err == nil {
+
+		loggingAppClusterRoleBinding := &rbacv1.ClusterRoleBinding{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: r.generateNameForComponent(instance, "cluster-logging-application-view"),
 			},
 		}
-		loggingAppClusterRoleBinding.RoleRef = rbacv1.RoleRef{
-			Kind:     "ClusterRole",
-			Name:     "cluster-logging-application-view",
-			APIGroup: "rbac.authorization.k8s.io",
+		_, err = CreateOrUpdateWithRetries(ctx, r.Client, loggingAppClusterRoleBinding, func() error {
+			loggingAppClusterRoleBinding.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
+			loggingAppClusterRoleBinding.Subjects = []rbacv1.Subject{
+				{
+					Kind:      "ServiceAccount",
+					Name:      r.generateNameForComponent(instance, "sa"),
+					Namespace: instance.Namespace,
+				},
+			}
+			loggingAppClusterRoleBinding.RoleRef = rbacv1.RoleRef{
+				Kind:     "ClusterRole",
+				Name:     "cluster-logging-application-view",
+				APIGroup: "rbac.authorization.k8s.io",
+			}
+			return nil
+		})
+		if err != nil {
+			return err
 		}
-		return nil
-	})
-	if err != nil {
-		return err
 	}
 
-	loggingInfraClusterRoleBinding := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: r.generateNameForComponent(instance, "cluster-logging-infrastructure-view"),
-		},
-	}
-	_, err = CreateOrUpdateWithRetries(ctx, r.Client, loggingInfraClusterRoleBinding, func() error {
-		loggingInfraClusterRoleBinding.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
-		loggingInfraClusterRoleBinding.Subjects = []rbacv1.Subject{
-			{
-				Kind:      "ServiceAccount",
-				Name:      r.generateNameForComponent(instance, "sa"),
-				Namespace: instance.Namespace,
+	err = r.Get(ctx, client.ObjectKey{Name: "cluster-logging-infrastructure-view"}, clusterRole)
+	if err == nil {
+		loggingInfraClusterRoleBinding := &rbacv1.ClusterRoleBinding{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: r.generateNameForComponent(instance, "cluster-logging-infrastructure-view"),
 			},
 		}
-		loggingInfraClusterRoleBinding.RoleRef = rbacv1.RoleRef{
-			Kind:     "ClusterRole",
-			Name:     "cluster-logging-infrastructure-view",
-			APIGroup: "rbac.authorization.k8s.io",
+		_, err = CreateOrUpdateWithRetries(ctx, r.Client, loggingInfraClusterRoleBinding, func() error {
+			loggingInfraClusterRoleBinding.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
+			loggingInfraClusterRoleBinding.Subjects = []rbacv1.Subject{
+				{
+					Kind:      "ServiceAccount",
+					Name:      r.generateNameForComponent(instance, "sa"),
+					Namespace: instance.Namespace,
+				},
+			}
+			loggingInfraClusterRoleBinding.RoleRef = rbacv1.RoleRef{
+				Kind:     "ClusterRole",
+				Name:     "cluster-logging-infrastructure-view",
+				APIGroup: "rbac.authorization.k8s.io",
+			}
+			return nil
+		})
+		if err != nil {
+			return err
 		}
-		return nil
-	})
-	if err != nil {
-		return err
 	}
 
-	loggingAuditClusterRoleBinding := &rbacv1.ClusterRoleBinding{
-		ObjectMeta: metav1.ObjectMeta{
-			Name: r.generateNameForComponent(instance, "cluster-logging-audit-view"),
-		},
-	}
-	_, err = CreateOrUpdateWithRetries(ctx, r.Client, loggingAuditClusterRoleBinding, func() error {
-		loggingAuditClusterRoleBinding.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
-		loggingAuditClusterRoleBinding.Subjects = []rbacv1.Subject{
-			{
-				Kind:      "ServiceAccount",
-				Name:      r.generateNameForComponent(instance, "sa"),
-				Namespace: instance.Namespace,
+	err = r.Get(ctx, client.ObjectKey{Name: "cluster-logging-audit-view"}, clusterRole)
+	if err == nil {
+		loggingAuditClusterRoleBinding := &rbacv1.ClusterRoleBinding{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: r.generateNameForComponent(instance, "cluster-logging-audit-view"),
 			},
 		}
-		loggingAuditClusterRoleBinding.RoleRef = rbacv1.RoleRef{
-			Kind:     "ClusterRole",
-			Name:     "cluster-logging-audit-view",
-			APIGroup: "rbac.authorization.k8s.io",
+		_, err = CreateOrUpdateWithRetries(ctx, r.Client, loggingAuditClusterRoleBinding, func() error {
+			loggingAuditClusterRoleBinding.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "grafana")
+			loggingAuditClusterRoleBinding.Subjects = []rbacv1.Subject{
+				{
+					Kind:      "ServiceAccount",
+					Name:      r.generateNameForComponent(instance, "sa"),
+					Namespace: instance.Namespace,
+				},
+			}
+			loggingAuditClusterRoleBinding.RoleRef = rbacv1.RoleRef{
+				Kind:     "ClusterRole",
+				Name:     "cluster-logging-audit-view",
+				APIGroup: "rbac.authorization.k8s.io",
+			}
+			return nil
+		})
+		if err != nil {
+			return err
 		}
 		return nil
-	})
-	if err != nil {
-		return err
 	}
 	return nil
 }

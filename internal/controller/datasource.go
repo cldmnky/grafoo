@@ -7,7 +7,9 @@ import (
 	grafanav1beta1 "github.com/grafana/grafana-operator/v5/api/v1beta1"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -39,7 +41,19 @@ func (r *GrafanaReconciler) ReconcileDataSources(ctx context.Context, instance *
 	}
 	logger.Info("Loki stacks", "loki", l)
 	*/
+	// Get all datasources
+	datasources := &grafanav1beta1.GrafanaDatasourceList{}
+	// create a labels.Selector for the datasources
+	// "app.kubernetes.io/instance":  instance.Name,
+	dsSelector := labels.SelectorFromSet(labels.Set{
+		"app.kubernetes.io/instance": instance.Name,
+	})
+	err = r.Client.List(ctx, datasources, &client.ListOptions{Namespace: instance.Namespace, LabelSelector: dsSelector})
+	if err != nil {
+		return err
+	}
 
+	var reconciledDatasources = make(map[string]bool)
 	for _, ds := range instance.Spec.DataSources {
 		switch ds.Type {
 		case "prometheus-incluster":
@@ -47,18 +61,33 @@ func (r *GrafanaReconciler) ReconcileDataSources(ctx context.Context, instance *
 			if err != nil {
 				return err
 			}
+			// add the datasource to the list of reconciled datasources
+			reconciledDatasources[r.generateNameForComponent(instance, ds.GetDataSourceNameHash())] = true
 		case "loki-incluster":
 			err = r.reconcileLokiDataSource(ctx, instance, ds, resp)
 			if err != nil {
 				return err
 			}
+			// add the datasource to the list of reconciled datasources
+			reconciledDatasources[r.generateNameForComponent(instance, ds.GetDataSourceNameHash())] = true
 		case "tempo-incluster":
 			err = r.reconcileTempoDataSource(ctx, instance, ds, resp)
 			if err != nil {
 				return err
 			}
+			// add the datasource to the list of reconciled datasources
+			reconciledDatasources[r.generateNameForComponent(instance, ds.GetDataSourceNameHash())] = true
 		default:
 			logger.Info("Unknown datasource type", "type", ds.Type)
+		}
+	}
+	for _, ds := range datasources.Items {
+		if _, ok := reconciledDatasources[ds.Name]; !ok {
+			logger.Info("Deleting datasource", "name", ds.Name)
+			err = r.Client.Delete(ctx, &ds)
+			if err != nil {
+				return err
+			}
 		}
 	}
 
@@ -71,6 +100,7 @@ func (r *GrafanaReconciler) reconcilePrometheusDataSource(ctx context.Context, i
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      r.generateNameForComponent(instance, ds.GetDataSourceNameHash()),
 			Namespace: instance.Namespace,
+			Labels:    r.generateLabelsForComponent(instance, "grafana"),
 		},
 	}
 	promDataSourceSpec := grafanav1beta1.GrafanaDatasourceSpec{
@@ -109,6 +139,7 @@ func (r *GrafanaReconciler) reconcileLokiDataSource(ctx context.Context, instanc
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      r.generateNameForComponent(instance, ds.GetDataSourceNameHash()),
 			Namespace: instance.Namespace,
+			Labels:    r.generateLabelsForComponent(instance, "grafana"),
 		},
 	}
 	lokiDataSourceSpec := grafanav1beta1.GrafanaDatasourceSpec{
@@ -148,6 +179,7 @@ func (r *GrafanaReconciler) reconcileTempoDataSource(ctx context.Context, instan
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      r.generateNameForComponent(instance, ds.GetDataSourceNameHash()),
 			Namespace: instance.Namespace,
+			Labels:    r.generateLabelsForComponent(instance, "grafana"),
 		},
 	}
 	tempoDataSourceSpec := grafanav1beta1.GrafanaDatasourceSpec{

@@ -33,6 +33,7 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 
 	grafoov1alpha1 "github.com/cldmnky/grafoo/api/v1alpha1"
 )
@@ -243,6 +244,7 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 // SetupWithManager sets up the controller with the Manager.
 func (r *GrafanaReconciler) SetupWithManager(mgr ctrl.Manager) error {
+	ignoreStatusUpdate := predicate.GenerationChangedPredicate{}
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&grafoov1alpha1.Grafana{}).
 		Owns(&grafanav1beta1.Grafana{}).
@@ -253,5 +255,6 @@ func (r *GrafanaReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Service{}).
 		Owns(&rbacv1.ClusterRoleBinding{}).
 		Owns(&networkingv1.Ingress{}).
+		WithEventFilter(ignoreStatusUpdate).
 		Complete(r)
 }

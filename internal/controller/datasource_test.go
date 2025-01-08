@@ -94,7 +94,64 @@ var _ = Describe("Datasource Controller", func() {
 				g.Expect(err).NotTo(HaveOccurred())
 				return nil
 			}, time.Minute, time.Second).Should(Succeed())
-
+		})
+		It("should successfully delete a data source", func() {
+			// Get the Grafana instance
+			Eventually(func(g Gomega) error {
+				err := k8sClient.Get(ctx, typeNamespacedName, grafana)
+				g.Expect(err).NotTo(HaveOccurred())
+				// Add a data source to the Grafana instance
+				grafana.Spec.DataSources = []grafoov1alpha1.DataSource{
+					{
+						Name:    "Prometheus",
+						Type:    "prometheus-incluster",
+						Enabled: true,
+						Prometheus: &grafoov1alpha1.PrometheusDS{
+							URL: "http://prometheus.default.svc.cluster.local",
+						},
+					},
+				}
+				err = k8sClient.Update(ctx, grafana)
+				g.Expect(err).NotTo(HaveOccurred())
+				return nil
+			}, time.Minute, time.Second).Should(Succeed())
+			// Get the Grafana instance
+			err := k8sClient.Get(ctx, typeNamespacedName, grafana)
+			dsHashName := grafana.Spec.DataSources[0].GetDataSourceNameHash()
+			Expect(err).NotTo(HaveOccurred())
+			By("Checking the created GrafanaDatasource")
+			Eventually(func(g Gomega) error {
+				err := k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resourceName + "-" + dsHashName,
+					Namespace: "default",
+				}, grafanaOperatedDS)
+				g.Expect(err).NotTo(HaveOccurred())
+				return nil
+			}, time.Minute, time.Second).Should(Succeed())
+			Eventually(func(g Gomega) error {
+				err := k8sClient.Get(ctx, typeNamespacedName, grafana)
+				g.Expect(err).NotTo(HaveOccurred())
+				grafana.Spec.DataSources = []grafoov1alpha1.DataSource{}
+				err = k8sClient.Update(ctx, grafana)
+				g.Expect(err).NotTo(HaveOccurred())
+				return nil
+			}, time.Minute, time.Second).Should(Succeed())
+			Expect(err).NotTo(HaveOccurred())
+			By("Checking the grafana instance")
+			Eventually(func(g Gomega) error {
+				err := k8sClient.Get(ctx, typeNamespacedName, grafana)
+				g.Expect(err).NotTo(HaveOccurred())
+				return nil
+			}, time.Minute, time.Second).Should(Succeed())
+			By("Checking the deleted GrafanaDatasource")
+			Eventually(func(g Gomega) error {
+				err := k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resourceName + "-" + dsHashName,
+					Namespace: "default",
+				}, grafanaOperatedDS)
+				g.Expect(errors.IsNotFound(err)).To(BeTrue())
+				return nil
+			}, time.Minute, time.Second).Should(Succeed())
 		})
 	})
 })

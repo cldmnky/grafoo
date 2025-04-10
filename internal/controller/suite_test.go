@@ -148,6 +148,7 @@ var _ = BeforeSuite(func() {
 	}).SetupWithManager(mgr)
 	Expect(err).ToNot(HaveOccurred())
 	go func() {
+		defer GinkgoRecover()
 		err = mgr.Start(ctx)
 		Expect(err).ToNot(HaveOccurred())
 	}()

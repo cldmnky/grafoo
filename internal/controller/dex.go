@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/url"
 
+	"github.com/go-logr/logr"
 	"github.com/google/uuid"
 	appsv1 "k8s.io/api/apps/v1"
 	authenticationv1 "k8s.io/api/authentication/v1"
@@ -14,57 +15,153 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	ctrl "sigs.k8s.io/controller-runtime"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	grafoov1alpha1 "github.com/cldmnky/grafoo/api/v1alpha1"
 )
 
-func (r *GrafanaReconciler) ReconcileDex(ctx context.Context, instance *grafoov1alpha1.Grafana) error {
+func (r *GrafanaReconciler) ReconcileDex(ctx context.Context, instance *grafoov1alpha1.Grafana, needsRefresh bool) error {
 	logger := log.FromContext(ctx)
-	// Create a secrets for the client secret, once
-	dexClientSecret := &corev1.Secret{}
-	if err := r.Client.Get(ctx, client.ObjectKey{Name: r.generateNameForComponent(instance, "dex-client-secret"), Namespace: instance.Namespace}, dexClientSecret); err != nil {
-		if apierrors.IsNotFound(err) {
-			logger.Info("Creating dex client secret")
-			dexClientSecret = &corev1.Secret{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      r.generateNameForComponent(instance, "dex-client-secret"),
-					Namespace: instance.Namespace,
-					Labels:    r.generateLabelsForComponent(instance, "dex"),
-				},
-				StringData: map[string]string{
-					"clientSecret": uuid.New().String(),
-				},
-			}
-			// set the owner reference
-			if err := ctrl.SetControllerReference(instance, dexClientSecret, r.Scheme); err != nil {
-				return err
-			}
-			if err := r.Client.Create(ctx, dexClientSecret); err != nil {
-				return err
-			}
-		} else {
+
+	if !instance.Spec.Dex.Enabled {
+		logger.Info("Dex is not enabled, skipping reconciliation")
+		// If Dex is not enabled, we should remove the Dex resources
+		if err := r.removeDexResources(ctx, instance); err != nil {
+			logger.Error(err, "Failed to remove Dex resources")
+		}
+		return nil
+	}
+
+	dexRouteUri, dexRouteDomain, grafanaRouteUri, err := r.getRouteUris(ctx, instance)
+	if err != nil {
+		return err
+	}
+
+	dexServiceAccount, err := r.reconcileDexServiceAccount(ctx, instance, dexRouteUri)
+	if err != nil {
+		return err
+	}
+
+	boundTokenSecret, err := r.reconcileBoundTokenSecret(ctx, instance, dexServiceAccount)
+	if err != nil {
+		return err
+	}
+
+	clientSecret, err := r.ensureDexClientSecret(ctx, instance, logger)
+	if err != nil {
+		return err
+	}
+
+	var configSha string
+	if needsRefresh {
+		logger.Info("Refreshing Dex config secret")
+		configSha, err = r.reconcileDexConfigSecret(ctx, instance, dexRouteUri, grafanaRouteUri, boundTokenSecret, clientSecret, logger)
+		if err != nil {
 			return err
 		}
 	}
-	// get the client secret again
-	clientSecret, err := r.getClientSecret(ctx, instance)
+
+	if configSha != "" {
+		err = r.reconcileDexDeployment(ctx, instance, dexServiceAccount, configSha)
+		if err != nil {
+			return err
+		}
+	}
+
+	err = r.reconcileDexService(ctx, instance)
 	if err != nil {
 		return err
 	}
 
+	err = r.reconcileDexIngress(ctx, instance, dexRouteDomain)
+	if err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (r *GrafanaReconciler) removeDexResources(ctx context.Context, instance *grafoov1alpha1.Grafana) error {
+	logger := log.FromContext(ctx)
+	dexServiceAccount := &corev1.ServiceAccount{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      r.generateNameForComponent(instance, "dex"),
+			Namespace: instance.Namespace,
+		},
+	}
+	if err := r.Client.Delete(ctx, dexServiceAccount); err != nil && !apierrors.IsNotFound(err) {
+		logger.Error(err, "Failed to delete Dex service account")
+	}
+	dexSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      r.generateNameForComponent(instance, "dex"),
+			Namespace: instance.Namespace,
+		},
+	}
+	if err := r.Client.Delete(ctx, dexSecret); err != nil && !apierrors.IsNotFound(err) {
+		logger.Error(err, "Failed to delete Dex secret")
+	}
+	dexClientSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      r.generateNameForComponent(instance, "dex-client-secret"),
+			Namespace: instance.Namespace,
+		},
+	}
+	if err := r.Client.Delete(ctx, dexClientSecret); err != nil && !apierrors.IsNotFound(err) {
+		logger.Error(err, "Failed to delete Dex client secret")
+	}
+	boundTokenSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-dex-token", instance.Name),
+			Namespace: instance.Namespace,
+		},
+	}
+	if err := r.Client.Delete(ctx, boundTokenSecret); err != nil && !apierrors.IsNotFound(err) {
+		logger.Error(err, "Failed to delete Dex bound token secret")
+	}
+	dexDeployment := &appsv1.Deployment{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      r.generateNameForComponent(instance, "dex"),
+			Namespace: instance.Namespace,
+		},
+	}
+	if err := r.Client.Delete(ctx, dexDeployment); err != nil && !apierrors.IsNotFound(err) {
+		logger.Error(err, "Failed to delete Dex deployment")
+	}
+	dexService := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      r.generateNameForComponent(instance, "dex"),
+			Namespace: instance.Namespace,
+		},
+	}
+	if err := r.Client.Delete(ctx, dexService); err != nil && !apierrors.IsNotFound(err) {
+		logger.Error(err, "Failed to delete Dex service")
+	}
+	dexIngress := &networkingv1.Ingress{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      r.generateNameForComponent(instance, "dex"),
+			Namespace: instance.Namespace,
+		},
+	}
+	if err := r.Client.Delete(ctx, dexIngress); err != nil && !apierrors.IsNotFound(err) {
+		logger.Error(err, "Failed to delete Dex ingress")
+	}
+	return nil
+}
+
+func (r *GrafanaReconciler) getRouteUris(ctx context.Context, instance *grafoov1alpha1.Grafana) (string, string, string, error) {
 	dexRouteUri := r.generateRouteUriForComponent(ctx, instance, "dex")
 	u, err := url.Parse(dexRouteUri)
 	if err != nil {
-		return err
+		return "", "", "", err
 	}
 	dexRouteDomain := u.Hostname()
-
 	grafanaRouteUri := r.generateRouteUriForComponent(ctx, instance, "grafana")
+	return dexRouteUri, dexRouteDomain, grafanaRouteUri, nil
+}
 
-	// Create an SA for dex
+func (r *GrafanaReconciler) reconcileDexServiceAccount(ctx context.Context, instance *grafoov1alpha1.Grafana, dexRouteUri string) (*corev1.ServiceAccount, error) {
 	dexServiceAccount := &corev1.ServiceAccount{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      r.generateNameForComponent(instance, "dex"),
@@ -72,57 +169,88 @@ func (r *GrafanaReconciler) ReconcileDex(ctx context.Context, instance *grafoov1
 			Labels:    r.generateLabelsForComponent(instance, "dex"),
 		},
 	}
-	_, err = CreateOrUpdateWithRetries(ctx, r.Client, dexServiceAccount, func() error {
+	_, err := CreateOrUpdateWithRetries(ctx, r.Client, dexServiceAccount, func() error {
 		dexServiceAccount.Labels = r.generateLabelsForComponent(instance, "dex")
 		dexServiceAccount.Annotations = map[string]string{
 			"serviceaccounts.openshift.io/oauth-redirecturi.dex": dexRouteUri + "/callback",
 		}
 		return ctrl.SetControllerReference(instance, dexServiceAccount, r.Scheme)
 	})
-	if err != nil {
-		return err
-	}
+	return dexServiceAccount, err
+}
 
+func (r *GrafanaReconciler) reconcileBoundTokenSecret(ctx context.Context, instance *grafoov1alpha1.Grafana, dexServiceAccount *corev1.ServiceAccount) (*corev1.Secret, error) {
 	boundTokenSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      fmt.Sprintf("%s-dex-token", instance.Name),
 			Namespace: instance.Namespace,
+			Annotations: map[string]string{
+				"kubernetes.io/service-account.name": dexServiceAccount.Name,
+			},
+			Labels: r.generateLabelsForComponent(instance, "dex"),
 		},
+		Type: corev1.SecretTypeServiceAccountToken,
 	}
-
-	op, err := CreateOrUpdateWithRetries(ctx, r.Client, boundTokenSecret, func() error {
+	_, err := CreateOrUpdateWithRetries(ctx, r.Client, boundTokenSecret, func() error {
 		boundTokenSecret.Labels = r.generateLabelsForComponent(instance, "dex")
 		return ctrl.SetControllerReference(instance, boundTokenSecret, r.Scheme)
 	})
-	if err != nil {
-		logger.Error(err, "Failed to create bound token secret")
-		return err
-	}
+	return boundTokenSecret, err
+}
 
-	var configSha string
-	// only create the token if the secret was created or updated
-	if op == controllerutil.OperationResultUpdated || op == controllerutil.OperationResultCreated {
-
-		request := &authenticationv1.TokenRequest{
-			Spec: authenticationv1.TokenRequestSpec{
-				Audiences: nil,
-				BoundObjectRef: &authenticationv1.BoundObjectReference{
-					Kind:       "Secret",
-					Name:       boundTokenSecret.Name,
-					UID:        boundTokenSecret.UID,
-					APIVersion: "v1",
-				},
+func (r *GrafanaReconciler) ensureDexClientSecret(ctx context.Context, instance *grafoov1alpha1.Grafana, logger logr.Logger) (string, error) {
+	clientSecret, err := r.getClientSecret(ctx, instance)
+	if err != nil && apierrors.IsNotFound(err) {
+		logger.Info("Creating dex client secret")
+		dexClientSecret := &corev1.Secret{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      r.generateNameForComponent(instance, "dex-client-secret"),
+				Namespace: instance.Namespace,
+				Labels:    r.generateLabelsForComponent(instance, "dex"),
+			},
+			StringData: map[string]string{
+				"clientSecret": uuid.New().String(),
 			},
 		}
-		resp, err := r.Clientset.CoreV1().ServiceAccounts(instance.Namespace).CreateToken(ctx, dexServiceAccount.Name, request, metav1.CreateOptions{})
-		if err != nil {
-			return err
+		if err := ctrl.SetControllerReference(instance, dexClientSecret, r.Scheme); err != nil {
+			return "", err
 		}
-		logger.Info("Created token for dex service account", "token expiration", resp.Status.ExpirationTimestamp.Time)
+		if err := r.Client.Create(ctx, dexClientSecret); err != nil {
+			return "", err
+		}
+		clientSecret = dexClientSecret.StringData["clientSecret"]
+	}
+	return clientSecret, err
+}
 
-		saToken := resp.Status.Token
-		dexConfig := map[string]string{
-			"config.yaml": fmt.Sprintf(`
+// reconcileDexConfigSecret creates or updates the Dex config secret with the provided configuration.
+// It generates a SHA256 hash of the config and sets it as an annotation on the secret.
+// It also creates a token request for the bound token secret and includes it in the config.
+// The config is passed as a string in the format expected by Dex.
+// The function returns the SHA256 hash of the config.
+func (r *GrafanaReconciler) reconcileDexConfigSecret(ctx context.Context, instance *grafoov1alpha1.Grafana, dexRouteUri, grafanaRouteUri string, boundTokenSecret *corev1.Secret, clientSecret string, logger logr.Logger) (string, error) {
+	request := &authenticationv1.TokenRequest{
+		Spec: authenticationv1.TokenRequestSpec{
+			Audiences: nil,
+			BoundObjectRef: &authenticationv1.BoundObjectReference{
+				Kind:       "Secret",
+				Name:       boundTokenSecret.Name,
+				UID:        boundTokenSecret.UID,
+				APIVersion: "v1",
+			},
+			ExpirationSeconds: int64Ptr(int64(instance.Spec.TokenDuration.Seconds())),
+		},
+	}
+	resp, err := r.Clientset.CoreV1().ServiceAccounts(instance.Namespace).CreateToken(ctx, boundTokenSecret.Annotations["kubernetes.io/service-account.name"], request, metav1.CreateOptions{})
+	if err != nil {
+		return "", err
+	}
+	logger.Info("Created token for dex service account", "token expiration", resp.Status.ExpirationTimestamp.Time)
+
+	saToken := resp.Status.Token
+
+	dexConfig := map[string]string{
+		"config.yaml": fmt.Sprintf(`
 logger:
   level: debug
 connectors:
@@ -153,38 +281,42 @@ telemetry:
 web:
   http: 0.0.0.0:5556	
 `, instance.Namespace, instance.Name, saToken, dexRouteUri, dexRouteUri, grafanaRouteUri, clientSecret),
-		}
-		// Create a secret for the dex config
-		dexSecret := &corev1.Secret{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      r.generateNameForComponent(instance, "dex"),
-				Namespace: instance.Namespace,
-			},
-		}
-		// Get the sha for the secret
-		configSha = sha256ForSecret(dexConfig["config.yaml"])
-
-		op, err := CreateOrUpdateWithRetries(ctx, r.Client, dexSecret, func() error {
-			dexSecret.Labels = r.generateLabelsForComponent(instance, "dex")
-			dexSecret.StringData = dexConfig
-			return ctrl.SetControllerReference(instance, dexSecret, r.Scheme)
-		})
-		if err != nil {
-			return err
-		}
-		if op == controllerutil.OperationResultUpdated {
-			logger.Info("Updated dex config secret", "sha", configSha)
-		}
 	}
 
-	// Create a dexDeployment instance for authentication
+	dexSecret := &corev1.Secret{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      r.generateNameForComponent(instance, "dex"),
+			Namespace: instance.Namespace,
+		},
+	}
+
+	configSha := sha256ForSecret(dexConfig["config.yaml"])
+
+	op, err := CreateOrUpdateWithRetries(ctx, r.Client, dexSecret, func() error {
+		dexSecret.Labels = r.generateLabelsForComponent(instance, "dex")
+		dexSecret.Annotations = map[string]string{
+			"checksum/config.yaml": configSha,
+		}
+		dexSecret.StringData = dexConfig
+		return ctrl.SetControllerReference(instance, dexSecret, r.Scheme)
+	})
+	if err != nil {
+		return "", err
+	}
+	if op == controllerutil.OperationResultUpdated {
+		logger.Info("Updated dex config secret", "sha", configSha)
+	}
+	return configSha, nil
+}
+
+func (r *GrafanaReconciler) reconcileDexDeployment(ctx context.Context, instance *grafoov1alpha1.Grafana, dexServiceAccount *corev1.ServiceAccount, configSha string) error {
 	dexDeployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      r.generateNameForComponent(instance, "dex"),
 			Namespace: instance.Namespace,
 		},
 	}
-	dwxDeploymentSpec := appsv1.DeploymentSpec{
+	dexDeploymentSpec := appsv1.DeploymentSpec{
 		Selector: &metav1.LabelSelector{
 			MatchLabels: r.generateLabelsForComponent(instance, "dex"),
 		},
@@ -253,17 +385,19 @@ web:
 		},
 	}
 
-	// CreateOrUpdate the dex instance
-	_, err = CreateOrUpdateWithRetries(ctx, r.Client, dexDeployment, func() error {
+	_, err := CreateOrUpdateWithRetries(ctx, r.Client, dexDeployment, func() error {
 		dexDeployment.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "dex")
-		dexDeployment.Spec = dwxDeploymentSpec
+		dexDeployment.Spec.Replicas = int32Ptr(1)
+		dexDeployment.Spec = dexDeploymentSpec
+		dexDeployment.Spec.Template.ObjectMeta.Annotations = map[string]string{
+			"checksum/config.yaml": configSha,
+		}
 		return ctrl.SetControllerReference(instance, dexDeployment, r.Scheme)
 	})
-	if err != nil {
-		return err
-	}
+	return err
+}
 
-	// Create a service for dex
+func (r *GrafanaReconciler) reconcileDexService(ctx context.Context, instance *grafoov1alpha1.Grafana) error {
 	dexService := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      r.generateNameForComponent(instance, "dex"),
@@ -290,17 +424,15 @@ web:
 		},
 		Selector: r.generateLabelsForComponent(instance, "dex"),
 	}
-	// CreateOrUpdate the dex service
-	_, err = CreateOrUpdateWithRetries(ctx, r.Client, dexService, func() error {
+	_, err := CreateOrUpdateWithRetries(ctx, r.Client, dexService, func() error {
 		dexService.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "dex")
 		dexService.Spec = dexServiceSpec
 		return ctrl.SetControllerReference(instance, dexService, r.Scheme)
 	})
-	if err != nil {
-		return err
-	}
+	return err
+}
 
-	// Create an ingress for dex
+func (r *GrafanaReconciler) reconcileDexIngress(ctx context.Context, instance *grafoov1alpha1.Grafana, dexRouteDomain string) error {
 	dexIngress := &networkingv1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      r.generateNameForComponent(instance, "dex"),
@@ -322,7 +454,7 @@ web:
 								}(),
 								Backend: networkingv1.IngressBackend{
 									Service: &networkingv1.IngressServiceBackend{
-										Name: dexService.Name,
+										Name: r.generateNameForComponent(instance, "dex"),
 										Port: networkingv1.ServiceBackendPort{
 											Number: grafoov1alpha1.DexHttpPort,
 										},
@@ -338,7 +470,7 @@ web:
 			{},
 		},
 	}
-	_, err = CreateOrUpdateWithRetries(ctx, r.Client, dexIngress, func() error {
+	_, err := CreateOrUpdateWithRetries(ctx, r.Client, dexIngress, func() error {
 		dexIngress.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "dex")
 		dexIngress.ObjectMeta.Annotations = map[string]string{
 			"route.openshift.io/termination": "edge",
@@ -346,9 +478,5 @@ web:
 		dexIngress.Spec = dexIngressSpec
 		return ctrl.SetControllerReference(instance, dexIngress, r.Scheme)
 	})
-	if err != nil {
-		return err
-	}
-
-	return nil
+	return err
 }

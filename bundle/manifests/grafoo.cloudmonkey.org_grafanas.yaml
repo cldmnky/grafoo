@@ -18,7 +18,6 @@ spec:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Grafana is the Schema for the grafanas API
         properties:
           apiVersion:
             description: |-
@@ -230,6 +229,10 @@ spec:
                 type: string
               tokenExpirationTime:
                 description: TokenExpirationTime is the time when the token will expire
+                format: date-time
+                type: string
+              tokenGenerationTime:
+                description: TokenGenerationTime is the time when the token was generated
                 format: date-time
                 type: string
             required:

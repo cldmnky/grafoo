@@ -9,6 +9,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -169,8 +170,9 @@ var _ = Describe("Dex", func() {
 				return nil
 			}, time.Minute, time.Second).Should(Succeed())
 			Expect(tr.Status.Authenticated).To(BeTrue())
+			Expect(tr.Status.User.Username).To(Equal("system:serviceaccount:default:test-grafana-dex"))
 		})
-		It("Dhould create a deployment and update the sha when the secret is changed", func() {
+		It("Should create a deployment and update the sha when the secret is changed", func() {
 			firstDeployment := &appsv1.Deployment{}
 			By("Getting the deployment")
 			deploymentTypeNamespacedName := types.NamespacedName{
@@ -186,6 +188,7 @@ var _ = Describe("Dex", func() {
 			Expect(firstDeployment.Spec.Template.Spec.Containers).To(HaveLen(1))
 			Expect(firstDeployment.Spec.Template.ObjectMeta.Annotations).To(HaveKey("checksum/config.yaml"))
 			firstSha := firstDeployment.Spec.Template.ObjectMeta.Annotations["checksum/config.yaml"]
+			Expect(firstSha).NotTo(BeEmpty())
 			By("Deleting the secret")
 			secret := &corev1.Secret{
 				ObjectMeta: metav1.ObjectMeta{
@@ -193,8 +196,21 @@ var _ = Describe("Dex", func() {
 					Namespace: "default",
 				},
 			}
-			err := k8sClient.Delete(ctx, secret)
-			Expect(err).NotTo(HaveOccurred())
+			secretNamespacedName := types.NamespacedName{
+				Name:      fmt.Sprintf("%s-dex-token", resourceName),
+				Namespace: "default",
+			}
+			Eventually(func(g Gomega) error {
+				err := k8sClient.Delete(ctx, secret)
+				g.Expect(err).NotTo(HaveOccurred())
+				return nil
+			}, time.Minute, time.Second).Should(Succeed())
+			By("Waiting for the secret to be recreated")
+			Eventually(func(g Gomega) error {
+				err := k8sClient.Get(ctx, secretNamespacedName, secret)
+				g.Expect(err).NotTo(HaveOccurred())
+				return nil
+			}, time.Minute, time.Second).Should(Succeed())
 			By("Getting the deployment again")
 			secondDeployment := &appsv1.Deployment{}
 			Eventually(func(g Gomega) error {
@@ -202,8 +218,81 @@ var _ = Describe("Dex", func() {
 				g.Expect(err).NotTo(HaveOccurred())
 				secondSha := secondDeployment.Spec.Template.ObjectMeta.Annotations["checksum/config.yaml"]
 				g.Expect(firstSha).NotTo(Equal(secondSha))
+				g.Expect(secondSha).NotTo(BeEmpty())
+				return nil
+			}, time.Second*15).Should(Succeed())
+		})
+	})
+
+	Context("When Dex service account is missing", func() {
+		It("Should recreate the service account", func() {
+			By("Deleting the Dex service account")
+			serviceAccount := &corev1.ServiceAccount{}
+			serviceAccountTypeNamespacedName := types.NamespacedName{
+				Name:      fmt.Sprintf("%s-dex", resourceName),
+				Namespace: "default",
+			}
+			Eventually(func(g Gomega) error {
+				err := k8sClient.Get(ctx, serviceAccountTypeNamespacedName, serviceAccount)
+				g.Expect(err).NotTo(HaveOccurred())
+				return k8sClient.Delete(ctx, serviceAccount)
+			}, time.Minute, time.Second).Should(Succeed())
+
+			By("Ensuring the service account is recreated")
+			Eventually(func(g Gomega) error {
+				err := k8sClient.Get(ctx, serviceAccountTypeNamespacedName, serviceAccount)
+				g.Expect(err).NotTo(HaveOccurred())
 				return nil
 			}, time.Minute, time.Second).Should(Succeed())
+		})
+	})
+
+	Context("When Dex ingress is missing", func() {
+		It("Should recreate the ingress", func() {
+			By("Deleting the Dex ingress")
+			ingress := &networkingv1.Ingress{}
+			ingressTypeNamespacedName := types.NamespacedName{
+				Name:      fmt.Sprintf("%s-dex", resourceName),
+				Namespace: "default",
+			}
+			Eventually(func(g Gomega) error {
+				err := k8sClient.Get(ctx, ingressTypeNamespacedName, ingress)
+				g.Expect(err).NotTo(HaveOccurred())
+				return k8sClient.Delete(ctx, ingress)
+			}, time.Minute, time.Second).Should(Succeed())
+
+			By("Ensuring the ingress is recreated")
+			Eventually(func(g Gomega) error {
+				err := k8sClient.Get(ctx, ingressTypeNamespacedName, ingress)
+				g.Expect(err).NotTo(HaveOccurred())
+				return nil
+			}, time.Minute, time.Second).Should(Succeed())
+		})
+	})
+	Context("When Dex is disabled", func() {
+		It("Should not create any Dex-related resources", func() {
+			By("Disabling Dex in the Grafana spec")
+			Eventually(func(g Gomega) error {
+				err := k8sClient.Get(ctx, typeNamespacedName, grafana)
+				g.Expect(err).NotTo(HaveOccurred())
+				grafana.Spec.Dex.Enabled = false
+				return k8sClient.Update(ctx, grafana)
+			}, time.Minute, time.Second).Should(Succeed())
+
+			By("Ensuring no Dex-related resources are created")
+			dexResources := []types.NamespacedName{
+				{Name: fmt.Sprintf("%s-dex", resourceName), Namespace: "default"},
+				{Name: fmt.Sprintf("%s-dex-client-secret", resourceName), Namespace: "default"},
+				{Name: fmt.Sprintf("%s-dex-token", resourceName), Namespace: "default"},
+			}
+			for _, resource := range dexResources {
+				secret := &corev1.Secret{}
+				Eventually(func(g Gomega) error {
+					err := k8sClient.Get(ctx, resource, secret)
+					g.Expect(err).To(HaveOccurred())
+					return nil
+				}, time.Minute, time.Second).Should(Succeed())
+			}
 		})
 	})
 })

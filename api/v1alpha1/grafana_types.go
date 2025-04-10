@@ -165,15 +165,16 @@ type GrafanaStatus struct {
 	// +optional
 	// +operator-sdk:csv:customresourcedefinitions:displayName="Token expiration time"
 	TokenExpirationTime *metav1.Time `json:"tokenExpirationTime,omitempty"`
+	// TokenGenerationTime is the time when the token was generated
+	// +optional
+	// +operator-sdk:csv:customresourcedefinitions:displayName="Token generation time"
+	TokenGenerationTime *metav1.Time `json:"tokenGenerationTime,omitempty"`
 	Phase               string       `json:"phase,omitempty"`
 	// +operator-sdk:csv:customresourcedefinitions:type=status
 	Conditions []metav1.Condition `json:"conditions"`
 }
 
-//+kubebuilder:object:root=true
-//+kubebuilder:subresource:status
-
-// Grafana is the Schema for the grafanas API
+// +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 type Grafana struct {
 	metav1.TypeMeta   `json:",inline"`
@@ -183,9 +184,7 @@ type Grafana struct {
 	Status GrafanaStatus `json:"status,omitempty"`
 }
 
-//+kubebuilder:object:root=true
-
-// GrafanaList contains a list of Grafana
+// +kubebuilder:object:root=true
 type GrafanaList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`

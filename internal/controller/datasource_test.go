@@ -155,3 +155,33 @@ var _ = Describe("Datasource Controller", func() {
 		})
 	})
 })
+
+var _ = Describe("extractTokenFromSecureJSONData", func() {
+	Context("When extracting token from secureJSONData", func() {
+		It("should extract token with Bearer prefix", func() {
+			jsonData := []byte(`{"httpHeaderValue1": "Bearer mytoken123"}`)
+			token, err := extractTokenFromSecureJSONData(jsonData)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(token).To(Equal("mytoken123"))
+		})
+
+		It("should not extract token without Bearer prefix", func() {
+			jsonData := []byte(`{"httpHeaderValue1": "mytoken123"}`)
+			_, err := extractTokenFromSecureJSONData(jsonData)
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("should return error when token key is missing", func() {
+			jsonData := []byte(`{"someOtherKey": "value"}`)
+			_, err := extractTokenFromSecureJSONData(jsonData)
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(Equal("token not found in secureJSONData"))
+		})
+
+		It("should return error with invalid JSON", func() {
+			jsonData := []byte(`{invalid json`)
+			_, err := extractTokenFromSecureJSONData(jsonData)
+			Expect(err).To(HaveOccurred())
+		})
+	})
+})

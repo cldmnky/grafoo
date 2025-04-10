@@ -178,6 +178,10 @@ func (in *GrafanaStatus) DeepCopyInto(out *GrafanaStatus) {
 		in, out := &in.TokenExpirationTime, &out.TokenExpirationTime
 		*out = (*in).DeepCopy()
 	}
+	if in.TokenGenerationTime != nil {
+		in, out := &in.TokenGenerationTime, &out.TokenGenerationTime
+		*out = (*in).DeepCopy()
+	}
 	if in.Conditions != nil {
 		in, out := &in.Conditions, &out.Conditions
 		*out = make([]v1.Condition, len(*in))

@@ -58,6 +58,7 @@ archives:
         format: zip
 
 changelog:
+  use: github
   sort: asc
   filters:
     exclude:

@@ -75,6 +75,9 @@ func (r *GrafooCustomDefaulter) Default(ctx context.Context, obj runtime.Object)
 	if len(grafoo.Spec.DataSources) == 0 {
 		grafoo.Spec.DataSources = DataSources
 	}
+	if grafoo.Spec.EnableMCOO == true {
+		grafoo.Spec.DataSources = append(grafoo.Spec.DataSources, DataSourceMcoo...)
+	}
 	// check if datasources are updated in the spec
 	return nil
 }

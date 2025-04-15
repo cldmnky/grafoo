@@ -92,6 +92,13 @@ func (r *GrafanaReconciler) ReconcileDataSources(ctx context.Context, instance *
 			}
 			// add the datasource to the list of reconciled datasources
 			reconciledDatasources[r.generateNameForComponent(instance, ds.GetDataSourceNameHash())] = true
+		case "prometheus-mcoo":
+			err = r.reconcilePrometheusDataSource(ctx, instance, ds, token)
+			if err != nil {
+				return err
+			}
+			// add the datasource to the list of reconciled datasources
+			reconciledDatasources[r.generateNameForComponent(instance, ds.GetDataSourceNameHash())] = true
 		default:
 			logger.Info("Unknown datasource type", "type", ds.Type)
 		}
@@ -117,15 +124,26 @@ func (r *GrafanaReconciler) reconcilePrometheusDataSource(ctx context.Context, i
 			Labels:    r.generateLabelsForComponent(instance, "grafana"),
 		},
 	}
+	var (
+		isDefault      *bool
+		secureJSONData json.RawMessage
+	)
+	if ds.Type == "prometheus-mcoo" {
+		isDefault = boolPtr(false)
+		secureJSONData = json.RawMessage(`{"httpHeaderValue1": "` + token + `"}`)
+	} else {
+		isDefault = boolPtr(true)
+		secureJSONData = json.RawMessage(`{"httpHeaderValue1": "Bearer ` + token + `"}`)
+	}
 	promDataSourceSpec := grafanav1beta1.GrafanaDatasourceSpec{
 		Datasource: &grafanav1beta1.GrafanaDatasourceInternal{
 			Name:           ds.Name,
 			Type:           "prometheus",
 			Access:         "proxy",
-			IsDefault:      boolPtr(true),
+			IsDefault:      isDefault,
 			URL:            ds.Prometheus.URL,
 			JSONData:       json.RawMessage(`{"httpHeaderName1": "Authorization", "tlsSkipVerify": true}`),
-			SecureJSONData: json.RawMessage(`{"httpHeaderValue1": "Bearer ` + token + `"}`),
+			SecureJSONData: secureJSONData,
 		},
 		InstanceSelector: &metav1.LabelSelector{
 			MatchLabels: r.generateLabelsForComponent(instance, "grafana"),

@@ -97,6 +97,7 @@ spec:
                       - prometheus-incluster
                       - loki-incluster
                       - tempo-incluster
+                      - prometheus-mcoo
                       type: string
                   type: object
                 type: array
@@ -117,6 +118,10 @@ spec:
                   and dex.<IngressDomain>.
                 pattern: ^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$
                 type: string
+              enableMCOO:
+                default: false
+                description: Enable multicluster observability operator
+                type: boolean
               mariadb:
                 description: MariaDB is the configuration for the MariaDB database
                 properties:

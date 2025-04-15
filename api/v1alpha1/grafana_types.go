@@ -53,6 +53,10 @@ type GrafanaSpec struct {
 	// MariaDB is the configuration for the MariaDB database
 	// +kubebuilder:validation:Optional
 	MariaDB *MariaDB `json:"mariadb,omitempty"`
+	// Enable multicluster observability operator
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=false
+	EnableMCOO bool `json:"enableMCOO,omitempty"`
 	// DataSources is the configuration for the DataSources
 	// +kubebuilder:validation:Optional
 	DataSources []DataSource `json:"datasources,omitempty"`
@@ -81,8 +85,13 @@ type Dex struct {
 
 // DataSourceType defines the type of the data source
 //
-// +kubebuilder:validation:Enum=prometheus-incluster;loki-incluster;tempo-incluster
+// +kubebuilder:validation:Enum=prometheus-incluster;loki-incluster;tempo-incluster;prometheus-mcoo
 type DataSourceType string
+
+// ToString converts the DataSourceType to a string
+func (d DataSourceType) ToString() string {
+	return string(d)
+}
 
 const (
 	// PrometheusInCluster is the Prometheus data source type
@@ -91,6 +100,8 @@ const (
 	LokiInCluster DataSourceType = "loki-incluster"
 	// TempoInCluster is the Tempo data source type
 	TempoInCluster DataSourceType = "tempo-incluster"
+	// PrometheusMcoo is the MCOO data source type
+	PrometheusMcoo DataSourceType = "prometheus-mcoo"
 )
 
 type DataSource struct {
@@ -99,7 +110,7 @@ type DataSource struct {
 	Name string `json:"name,omitempty"`
 	// +required
 	// +kubebuilder:validation:Required
-	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:select:tempo-incluster","urn:alm:descriptor:com.tectonic.ui:select:loki-incluster","urn:alm:descriptor:com.tectonic.ui:select:prometheus-incluster"},displayName="DataSource type"
+	// +operator-sdk:csv:customresourcedefinitions:type=spec,xDescriptors={"urn:alm:descriptor:com.tectonic.ui:select:tempo-incluster","urn:alm:descriptor:com.tectonic.ui:select:loki-incluster","urn:alm:descriptor:com.tectonic.ui:select:prometheus-incluster","urn:alm:descriptor:com.tectonic.ui:select:prometheus-mcoo"},displayName="DataSource type"
 	Type DataSourceType `json:"type,omitempty"`
 	// +kubebuilder:validation:Required
 	Enabled bool `json:"enabled,omitempty"`

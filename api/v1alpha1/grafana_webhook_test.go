@@ -126,6 +126,25 @@ var _ = Describe("Grafana Webhook", func() {
 			Expect(warn).To(BeNil())
 		})
 
+		It("Should add prometheus-mcoo datasource if GrafooDefaultEnableMCOO is true", func() {
+			g := &Grafana{
+				Spec: GrafanaSpec{
+					EnableMCOO: true,
+				},
+			}
+			d := &GrafooCustomDefaulter{}
+			err := d.Default(ctx, g)
+			Expect(err).To(BeNil())
+			Expect(g.Spec.DataSources).ToNot(BeNil())
+			Expect(g.Spec.DataSources).To(HaveLen(7))
+			Expect(g.Spec.DataSources[6].Name).To(Equal("Prometheus (MCOO)"))
+			// Cast to string to avoid type mismatch
+			Expect(g.Spec.DataSources[6].Type.ToString()).To(Equal("prometheus-mcoo"))
+			Expect(g.Spec.DataSources[6].Enabled).To(BeTrue())
+			Expect(g.Spec.DataSources[6].Prometheus).ToNot(BeNil())
+			Expect(g.Spec.DataSources[6].Prometheus.URL).To(Equal("http://rbac-query-proxy.open-cluster-management-observability.svc.cluster.local:8080"))
+		})
+
 		It("Should admit if all required fields are provided", func() {
 
 			// TODO(user): Add your logic here

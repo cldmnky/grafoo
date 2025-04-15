@@ -26,7 +26,18 @@ var (
 	DexMetricsPort     = int32(5557)
 	MariaDBStorageSize = "5Gi"
 	MariaDBImage       = config.MariaDBImage
-	DataSources        = []DataSource{
+	DataSourceMcoo     = []DataSource{
+		{
+			Name:    "Prometheus (MCOO)",
+			Type:    "prometheus-mcoo",
+			Enabled: true,
+			Prometheus: &PrometheusDS{
+				URL: "http://rbac-query-proxy.open-cluster-management-observability.svc.cluster.local:8080",
+			},
+		},
+	}
+	GrafooDefaultEnableMCOO = false
+	DataSources             = []DataSource{
 		{
 			Name:    "Prometheus",
 			Type:    "prometheus-incluster",

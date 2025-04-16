@@ -10,8 +10,7 @@ spec:
   apiservicedefinitions: {}
   customresourcedefinitions:
     owned:
-    - description: Grafana is the Schema for the grafanas API
-      displayName: Grafana
+    - displayName: Grafana
       kind: Grafana
       name: grafanas.grafoo.cloudmonkey.org
       specDescriptors:
@@ -21,6 +20,7 @@ spec:
         - urn:alm:descriptor:com.tectonic.ui:select:tempo-incluster
         - urn:alm:descriptor:com.tectonic.ui:select:loki-incluster
         - urn:alm:descriptor:com.tectonic.ui:select:prometheus-incluster
+        - urn:alm:descriptor:com.tectonic.ui:select:prometheus-mcoo
       statusDescriptors:
       - displayName: Conditions
         path: conditions

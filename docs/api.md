@@ -28,11 +28,25 @@ _Appears in:_
 | Field | Description | Default | Validation |
 | --- | --- | --- | --- |
 | `name` _string_ | Name is the name of the DataSource |  | Required: {} <br /> |
-| `type` _string_ | Type is the type of the DataSource |  | Enum: [prometheus-incluster loki-incluster tempo-incluster] <br />Required: {} <br /> |
-| `enabled` _boolean_ | Enabled is a flag to enable or disable the DataSource |  | Required: {} <br /> |
+| `type` _[DataSourceType](#datasourcetype)_ |  |  | Enum: [prometheus-incluster loki-incluster tempo-incluster prometheus-mcoo] <br />Required: {} <br /> |
+| `enabled` _boolean_ |  |  | Required: {} <br /> |
 | `loki` _[LokiDS](#lokids)_ | Loki is the configuration for the Loki DataSource |  | Optional: {} <br /> |
 | `tempo` _[TempoDS](#tempods)_ | Tempo is the configuration for the Tempo DataSource |  | Optional: {} <br /> |
 | `prometheus` _[PrometheusDS](#prometheusds)_ | Prometheus is the configuration for the Prometheus DataSource |  | Optional: {} <br /> |
+
+
+#### DataSourceType
+
+_Underlying type:_ _string_
+
+DataSourceType defines the type of the data source
+
+_Validation:_
+- Enum: [prometheus-incluster loki-incluster tempo-incluster prometheus-mcoo]
+
+_Appears in:_
+- [DataSource](#datasource)
+
 
 
 #### Dex
@@ -56,7 +70,7 @@ _Appears in:_
 
 
 
-Grafana is the Schema for the grafanas API
+
 
 
 
@@ -75,7 +89,7 @@ _Appears in:_
 
 
 
-GrafanaList contains a list of Grafana
+
 
 
 
@@ -108,7 +122,10 @@ _Appears in:_
 | `domain` _string_ | IngressDomain is the domain to use for the Grafana Ingress, setting a domain will create an Ingress for Grafana and Dex as grafana.<IngressDomain> and dex.<IngressDomain>. |  | Optional: {} <br />Pattern: `^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$` <br /> |
 | `dex` _[Dex](#dex)_ | Dex is the configuration for the Dex OIDC provider |  | Optional: {} <br /> |
 | `mariadb` _[MariaDB](#mariadb)_ | MariaDB is the configuration for the MariaDB database |  | Optional: {} <br /> |
+| `enableMCOO` _boolean_ | Enable multicluster observability operator | false | Optional: {} <br /> |
 | `datasources` _[DataSource](#datasource) array_ | DataSources is the configuration for the DataSources |  | Optional: {} <br /> |
+
+
 
 
 

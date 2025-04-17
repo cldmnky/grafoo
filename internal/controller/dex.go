@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"net/url"
+	"time"
 
 	"github.com/go-logr/logr"
 	"github.com/google/uuid"
+	"github.com/prometheus/client_golang/prometheus"
 	appsv1 "k8s.io/api/apps/v1"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -17,68 +19,141 @@ import (
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/controller-runtime/pkg/metrics"
 
 	grafoov1alpha1 "github.com/cldmnky/grafoo/api/v1alpha1"
 )
 
+// Dex reconciler metrics
+var (
+	dexReconcileTotal = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "grafoo_dex_reconcile_total",
+			Help: "Total number of reconciliations of the Dex component",
+		},
+		[]string{"namespace", "name", "result"},
+	)
+
+	dexReconcileDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "grafoo_dex_reconcile_duration_seconds",
+			Help:    "Duration of Dex reconciliation in seconds",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"namespace", "name"},
+	)
+
+	dexResourceOperations = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "grafoo_dex_resource_operations_total",
+			Help: "Total number of resource operations performed by the Dex reconciler",
+		},
+		[]string{"namespace", "name", "resource", "operation"},
+	)
+
+	dexTokenRefreshes = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "grafoo_dex_token_refreshes_total",
+			Help: "Total number of token refreshes for Dex",
+		},
+		[]string{"namespace", "name"},
+	)
+)
+
+func init() {
+	// Register metrics with the global metrics registry
+	metrics.Registry.MustRegister(
+		dexReconcileTotal,
+		dexReconcileDuration,
+		dexResourceOperations,
+		dexTokenRefreshes,
+	)
+}
+
 func (r *GrafanaReconciler) ReconcileDex(ctx context.Context, instance *grafoov1alpha1.Grafana, needsRefresh bool) error {
 	logger := log.FromContext(ctx)
+	start := time.Now()
+
+	// Record metrics at the end of reconciliation
+	defer func() {
+		dexReconcileDuration.WithLabelValues(instance.Namespace, instance.Name).Observe(time.Since(start).Seconds())
+	}()
 
 	if !instance.Spec.Dex.Enabled {
 		logger.Info("Dex is not enabled, skipping reconciliation")
 		// If Dex is not enabled, we should remove the Dex resources
 		if err := r.removeDexResources(ctx, instance); err != nil {
 			logger.Error(err, "Failed to remove Dex resources")
+			dexReconcileTotal.WithLabelValues(instance.Namespace, instance.Name, "failure").Inc()
+			return err
 		}
+		dexReconcileTotal.WithLabelValues(instance.Namespace, instance.Name, "success").Inc()
 		return nil
 	}
 
 	dexRouteUri, dexRouteDomain, grafanaRouteUri, err := r.getRouteUris(ctx, instance)
 	if err != nil {
+		dexReconcileTotal.WithLabelValues(instance.Namespace, instance.Name, "failure").Inc()
 		return err
 	}
 
 	dexServiceAccount, err := r.reconcileDexServiceAccount(ctx, instance, dexRouteUri)
 	if err != nil {
+		dexReconcileTotal.WithLabelValues(instance.Namespace, instance.Name, "failure").Inc()
 		return err
 	}
+	dexResourceOperations.WithLabelValues(instance.Namespace, instance.Name, "serviceaccount", "reconcile").Inc()
 
 	boundTokenSecret, err := r.reconcileBoundTokenSecret(ctx, instance, dexServiceAccount)
 	if err != nil {
+		dexReconcileTotal.WithLabelValues(instance.Namespace, instance.Name, "failure").Inc()
 		return err
 	}
+	dexResourceOperations.WithLabelValues(instance.Namespace, instance.Name, "boundsecret", "reconcile").Inc()
 
 	clientSecret, err := r.ensureDexClientSecret(ctx, instance, logger)
 	if err != nil {
+		dexReconcileTotal.WithLabelValues(instance.Namespace, instance.Name, "failure").Inc()
 		return err
 	}
+	dexResourceOperations.WithLabelValues(instance.Namespace, instance.Name, "clientsecret", "reconcile").Inc()
 
 	var configSha string
 	if needsRefresh {
 		logger.Info("Refreshing Dex config secret")
+		dexTokenRefreshes.WithLabelValues(instance.Namespace, instance.Name).Inc()
 		configSha, err = r.reconcileDexConfigSecret(ctx, instance, dexRouteUri, grafanaRouteUri, boundTokenSecret, clientSecret, logger)
 		if err != nil {
+			dexReconcileTotal.WithLabelValues(instance.Namespace, instance.Name, "failure").Inc()
 			return err
 		}
+		dexResourceOperations.WithLabelValues(instance.Namespace, instance.Name, "configsecret", "reconcile").Inc()
 	}
 
 	if configSha != "" {
 		err = r.reconcileDexDeployment(ctx, instance, dexServiceAccount, configSha)
 		if err != nil {
+			dexReconcileTotal.WithLabelValues(instance.Namespace, instance.Name, "failure").Inc()
 			return err
 		}
+		dexResourceOperations.WithLabelValues(instance.Namespace, instance.Name, "deployment", "reconcile").Inc()
 	}
 
 	err = r.reconcileDexService(ctx, instance)
 	if err != nil {
+		dexReconcileTotal.WithLabelValues(instance.Namespace, instance.Name, "failure").Inc()
 		return err
 	}
+	dexResourceOperations.WithLabelValues(instance.Namespace, instance.Name, "service", "reconcile").Inc()
 
 	err = r.reconcileDexIngress(ctx, instance, dexRouteDomain)
 	if err != nil {
+		dexReconcileTotal.WithLabelValues(instance.Namespace, instance.Name, "failure").Inc()
 		return err
 	}
+	dexResourceOperations.WithLabelValues(instance.Namespace, instance.Name, "ingress", "reconcile").Inc()
 
+	dexReconcileTotal.WithLabelValues(instance.Namespace, instance.Name, "success").Inc()
 	return nil
 }
 
@@ -92,6 +167,8 @@ func (r *GrafanaReconciler) removeDexResources(ctx context.Context, instance *gr
 	}
 	if err := r.Client.Delete(ctx, dexServiceAccount); err != nil && !apierrors.IsNotFound(err) {
 		logger.Error(err, "Failed to delete Dex service account")
+	} else if !apierrors.IsNotFound(err) {
+		dexResourceOperations.WithLabelValues(instance.Namespace, instance.Name, "serviceaccount", "delete").Inc()
 	}
 	dexSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -101,6 +178,8 @@ func (r *GrafanaReconciler) removeDexResources(ctx context.Context, instance *gr
 	}
 	if err := r.Client.Delete(ctx, dexSecret); err != nil && !apierrors.IsNotFound(err) {
 		logger.Error(err, "Failed to delete Dex secret")
+	} else if !apierrors.IsNotFound(err) {
+		dexResourceOperations.WithLabelValues(instance.Namespace, instance.Name, "secret", "delete").Inc()
 	}
 	dexClientSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -110,6 +189,8 @@ func (r *GrafanaReconciler) removeDexResources(ctx context.Context, instance *gr
 	}
 	if err := r.Client.Delete(ctx, dexClientSecret); err != nil && !apierrors.IsNotFound(err) {
 		logger.Error(err, "Failed to delete Dex client secret")
+	} else if !apierrors.IsNotFound(err) {
+		dexResourceOperations.WithLabelValues(instance.Namespace, instance.Name, "clientsecret", "delete").Inc()
 	}
 	boundTokenSecret := &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{
@@ -119,6 +200,8 @@ func (r *GrafanaReconciler) removeDexResources(ctx context.Context, instance *gr
 	}
 	if err := r.Client.Delete(ctx, boundTokenSecret); err != nil && !apierrors.IsNotFound(err) {
 		logger.Error(err, "Failed to delete Dex bound token secret")
+	} else if !apierrors.IsNotFound(err) {
+		dexResourceOperations.WithLabelValues(instance.Namespace, instance.Name, "boundsecret", "delete").Inc()
 	}
 	dexDeployment := &appsv1.Deployment{
 		ObjectMeta: metav1.ObjectMeta{
@@ -128,6 +211,8 @@ func (r *GrafanaReconciler) removeDexResources(ctx context.Context, instance *gr
 	}
 	if err := r.Client.Delete(ctx, dexDeployment); err != nil && !apierrors.IsNotFound(err) {
 		logger.Error(err, "Failed to delete Dex deployment")
+	} else if !apierrors.IsNotFound(err) {
+		dexResourceOperations.WithLabelValues(instance.Namespace, instance.Name, "deployment", "delete").Inc()
 	}
 	dexService := &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{
@@ -137,6 +222,8 @@ func (r *GrafanaReconciler) removeDexResources(ctx context.Context, instance *gr
 	}
 	if err := r.Client.Delete(ctx, dexService); err != nil && !apierrors.IsNotFound(err) {
 		logger.Error(err, "Failed to delete Dex service")
+	} else if !apierrors.IsNotFound(err) {
+		dexResourceOperations.WithLabelValues(instance.Namespace, instance.Name, "service", "delete").Inc()
 	}
 	dexIngress := &networkingv1.Ingress{
 		ObjectMeta: metav1.ObjectMeta{
@@ -146,6 +233,8 @@ func (r *GrafanaReconciler) removeDexResources(ctx context.Context, instance *gr
 	}
 	if err := r.Client.Delete(ctx, dexIngress); err != nil && !apierrors.IsNotFound(err) {
 		logger.Error(err, "Failed to delete Dex ingress")
+	} else if !apierrors.IsNotFound(err) {
+		dexResourceOperations.WithLabelValues(instance.Namespace, instance.Name, "ingress", "delete").Inc()
 	}
 	return nil
 }
@@ -470,7 +559,7 @@ func (r *GrafanaReconciler) reconcileDexIngress(ctx context.Context, instance *g
 			{},
 		},
 	}
-	_, err := CreateOrUpdateWithRetries(ctx, r.Client, dexIngress, func() error {
+	op, err := CreateOrUpdateWithRetries(ctx, r.Client, dexIngress, func() error {
 		dexIngress.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "dex")
 		dexIngress.ObjectMeta.Annotations = map[string]string{
 			"route.openshift.io/termination": "edge",
@@ -478,5 +567,8 @@ func (r *GrafanaReconciler) reconcileDexIngress(ctx context.Context, instance *g
 		dexIngress.Spec = dexIngressSpec
 		return ctrl.SetControllerReference(instance, dexIngress, r.Scheme)
 	})
+	if err == nil && op != controllerutil.OperationResultNone {
+		dexResourceOperations.WithLabelValues(instance.Namespace, instance.Name, "ingress", string(op)).Inc()
+	}
 	return err
 }

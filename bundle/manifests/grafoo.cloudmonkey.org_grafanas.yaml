@@ -18,7 +18,6 @@ spec:
   - name: v1alpha1
     schema:
       openAPIV3Schema:
-        description: Grafana is the Schema for the grafanas API
         properties:
           apiVersion:
             description: |-
@@ -99,6 +98,7 @@ spec:
                       - prometheus-incluster
                       - loki-incluster
                       - tempo-incluster
+                      - prometheus-mcoo
                       type: string
                   type: object
                 type: array
@@ -119,6 +119,10 @@ spec:
                   and dex.<IngressDomain>.
                 pattern: ^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$
                 type: string
+              enableMCOO:
+                default: false
+                description: Enable multicluster observability operator
+                type: boolean
               mariadb:
                 description: MariaDB is the configuration for the MariaDB database
                 properties:
@@ -230,6 +234,10 @@ spec:
                 type: string
               tokenExpirationTime:
                 description: TokenExpirationTime is the time when the token will expire
+                format: date-time
+                type: string
+              tokenGenerationTime:
+                description: TokenGenerationTime is the time when the token was generated
                 format: date-time
                 type: string
             required:

@@ -21,17 +21,16 @@ metadata:
         }
       ]
     capabilities: Basic Install
-    createdAt: "2024-10-03T16:13:01Z"
+    createdAt: "2025-04-17T09:47:29Z"
     operators.operatorframework.io/builder: operator-sdk-v1.34.2
     operators.operatorframework.io/project_layout: go.kubebuilder.io/v4
-  name: grafoo.v0.1.1
+  name: grafoo.v0.1.5
   namespace: placeholder
 spec:
   apiservicedefinitions: {}
   customresourcedefinitions:
     owned:
-    - description: Grafana is the Schema for the grafanas API
-      displayName: Grafana
+    - displayName: Grafana
       kind: Grafana
       name: grafanas.grafoo.cloudmonkey.org
       specDescriptors:
@@ -41,6 +40,7 @@ spec:
         - urn:alm:descriptor:com.tectonic.ui:select:tempo-incluster
         - urn:alm:descriptor:com.tectonic.ui:select:loki-incluster
         - urn:alm:descriptor:com.tectonic.ui:select:prometheus-incluster
+        - urn:alm:descriptor:com.tectonic.ui:select:prometheus-mcoo
       statusDescriptors:
       - displayName: Conditions
         path: conditions
@@ -334,12 +334,12 @@ spec:
             spec:
               containers:
               - args:
-                - --health-probe-bind-address=:8081
-                - --metrics-bind-address=127.0.0.1:8080
+                - --metrics-bind-address=:8443
                 - --leader-elect
+                - --health-probe-bind-address=:8081
                 command:
                 - /ko-app/grafoo
-                image: quay.io/cldmnky/grafoo:0.1.1
+                image: quay.io/cldmnky/grafoo:latest
                 livenessProbe:
                   httpGet:
                     path: /healthz
@@ -373,29 +373,6 @@ spec:
                 - mountPath: /tmp/k8s-webhook-server/serving-certs
                   name: cert
                   readOnly: true
-              - args:
-                - --secure-listen-address=0.0.0.0:8443
-                - --upstream=http://127.0.0.1:8080/
-                - --logtostderr=true
-                - --v=0
-                image: gcr.io/kubebuilder/kube-rbac-proxy:v0.15.0
-                name: kube-rbac-proxy
-                ports:
-                - containerPort: 8443
-                  name: https
-                  protocol: TCP
-                resources:
-                  limits:
-                    cpu: 500m
-                    memory: 128Mi
-                  requests:
-                    cpu: 5m
-                    memory: 64Mi
-                securityContext:
-                  allowPrivilegeEscalation: false
-                  capabilities:
-                    drop:
-                    - ALL
               securityContext:
                 runAsNonRoot: true
               serviceAccountName: grafoo-operator
@@ -461,7 +438,7 @@ spec:
   minKubeVersion: 1.26.0
   provider:
     name: grafoo
-  version: 0.1.1
+  version: 0.1.5
   webhookdefinitions:
   - admissionReviewVersions:
     - v1

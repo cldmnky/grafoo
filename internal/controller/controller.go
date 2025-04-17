@@ -21,6 +21,7 @@ import (
 	"time"
 
 	grafanav1beta1 "github.com/grafana/grafana-operator/v5/api/v1beta1"
+	"github.com/prometheus/client_golang/prometheus"
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
@@ -47,6 +48,33 @@ const (
 	typeDataSourcesReady = "DataSourcesReady"
 	typeGrafanaReady     = "GrafanaReady"
 )
+
+// Metrics
+var (
+	// GrafanaReconcilerDuration is a histogram metric that tracks the duration of the Grafana reconciler
+	GrafanaReconcilerDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "grafana_reconciler_duration_seconds",
+			Help:    "Duration of the Grafana reconciler",
+			Buckets: []float64{0.1, 0.5, 1, 2, 5, 10},
+		},
+		[]string{"namespace", "name"},
+	)
+	// GrafanaReconcilerErrors is a counter metric that tracks the number of errors in the Grafana reconciler
+	GrafanaReconcilerErrors = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "grafana_reconciler_errors_total",
+			Help: "Total number of errors in the Grafana reconciler",
+		},
+		[]string{"namespace", "name", "error"},
+	)
+)
+
+func init() {
+	// Register metrics with the global Prometheus registry
+	prometheus.MustRegister(GrafanaReconcilerDuration)
+	prometheus.MustRegister(GrafanaReconcilerErrors)
+}
 
 // GrafanaReconciler reconciles a Grafana object
 type GrafanaReconciler struct {
@@ -88,6 +116,15 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	logger := log.FromContext(ctx)
 	logger.Info("Reconciling Grafana")
 
+	// Start timing the reconciliation
+	start := time.Now()
+
+	// Defer the recording of the reconciliation duration
+	defer func() {
+		duration := time.Since(start).Seconds()
+		GrafanaReconcilerDuration.WithLabelValues(req.Namespace, req.Name).Observe(duration)
+	}()
+
 	// Fetch the Grafana grafooInstance
 	grafooInstance := &grafoov1alpha1.Grafana{}
 	err := r.Get(ctx, req.NamespacedName, grafooInstance)
@@ -98,6 +135,7 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 		// Error reading the object - requeue the request.
 		logger.Error(err, "Failed to get Grafana instance")
+		GrafanaReconcilerErrors.WithLabelValues(req.Namespace, req.Name, "failed_to_get_instance").Inc()
 		return ctrl.Result{}, err
 	}
 
@@ -145,11 +183,13 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 		if err := r.Status().Update(ctx, grafooInstance); err != nil {
 			logger.Error(err, "Failed to update status")
+			GrafanaReconcilerErrors.WithLabelValues(req.Namespace, req.Name, "status_update_failed").Inc()
 			return ctrl.Result{}, err
 		}
 		// re-fetch the grafooInstance to get the updated resource version
 		if err := r.Get(ctx, req.NamespacedName, grafooInstance); err != nil {
 			logger.Error(err, "Failed to get Grafana instance")
+			GrafanaReconcilerErrors.WithLabelValues(req.Namespace, req.Name, "failed_to_get_instance").Inc()
 			return ctrl.Result{}, err
 		}
 		logger.Info("Updated initial status")
@@ -159,6 +199,7 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	needsRefresh, err := needsRefreshedToken(grafooInstance)
 	if err != nil {
 		logger.Error(err, "Failed to check if token needs refresh")
+		GrafanaReconcilerErrors.WithLabelValues(req.Namespace, req.Name, "token_refresh_check_failed").Inc()
 		return ctrl.Result{}, err
 	}
 
@@ -178,6 +219,7 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if grafooInstance.Spec.Dex != nil {
 		if err := r.ReconcileDex(ctx, grafooInstance, needsRefresh); err != nil {
 			logger.Error(err, "Failed to reconcile dex")
+			GrafanaReconcilerErrors.WithLabelValues(req.Namespace, req.Name, "dex_reconciliation_failed").Inc()
 			// status
 			meta.SetStatusCondition(&grafooInstance.Status.Conditions, metav1.Condition{
 				Type:    typeDexReady,
@@ -200,6 +242,7 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	if grafooInstance.Spec.MariaDB != nil {
 		if err := r.ReconcileMariaDB(ctx, grafooInstance); err != nil {
 			logger.Error(err, "Failed to reconcile mariadb")
+			GrafanaReconcilerErrors.WithLabelValues(req.Namespace, req.Name, "mariadb_reconciliation_failed").Inc()
 			// status
 			meta.SetStatusCondition(&grafooInstance.Status.Conditions, metav1.Condition{
 				Type:    typeMariaDBReady,
@@ -221,6 +264,7 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// Reconcile Grafana
 	if err := r.ReconcileGrafana(ctx, grafooInstance); err != nil {
 		logger.Error(err, "Failed to reconcile grafana")
+		GrafanaReconcilerErrors.WithLabelValues(req.Namespace, req.Name, "grafana_reconciliation_failed").Inc()
 		// status
 		meta.SetStatusCondition(&grafooInstance.Status.Conditions, metav1.Condition{
 			Type:    typeGrafanaReady,
@@ -241,6 +285,7 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// Create a datasource instance
 	if err := r.ReconcileDataSources(ctx, grafooInstance, needsRefresh); err != nil {
 		logger.Error(err, "Failed to reconcile datasource")
+		GrafanaReconcilerErrors.WithLabelValues(req.Namespace, req.Name, "datasources_reconciliation_failed").Inc()
 		// status
 		meta.SetStatusCondition(&grafooInstance.Status.Conditions, metav1.Condition{
 			Type:    typeDataSourcesReady,
@@ -268,6 +313,7 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	// Update the status of the resource
 	if err := r.Status().Update(ctx, grafooInstance); err != nil {
 		logger.Error(err, "Failed to update status")
+		GrafanaReconcilerErrors.WithLabelValues(req.Namespace, req.Name, "status_update_failed").Inc()
 		return ctrl.Result{}, err
 	}
 

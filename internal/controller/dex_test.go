@@ -6,6 +6,7 @@ import (
 
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	appsv1 "k8s.io/api/apps/v1"
 	authenticationv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
@@ -293,6 +294,27 @@ var _ = Describe("Dex", func() {
 					return nil
 				}, time.Minute, time.Second).Should(Succeed())
 			}
+		})
+	})
+})
+
+var _ = Describe("Dex Metrics", func() {
+	Context("When checking metrics registration", func() {
+		It("should have metrics defined with correct parameters", func() {
+			Expect(dexReconcileTotal).NotTo(BeNil())
+			Expect(dexReconcileDuration).NotTo(BeNil())
+			Expect(dexResourceOperations).NotTo(BeNil())
+			Expect(dexTokenRefreshes).NotTo(BeNil())
+
+			// Reset metrics before checking
+			dexReconcileTotal.Reset()
+
+			// Add a sample metric with namespace, name, and result labels (all three required)
+			dexReconcileTotal.WithLabelValues("test-ns", "test-name", "success").Inc()
+
+			// Verify the metric was recorded
+			count := testutil.ToFloat64(dexReconcileTotal.WithLabelValues("test-ns", "test-name", "success"))
+			Expect(count).To(Equal(1.0))
 		})
 	})
 })

@@ -241,5 +241,32 @@ var _ = Describe("Grafana Controller", func() {
 			Expect(grafana.Status.TokenGenerationTime.Time).To(BeTemporally("<", time.Now(), time.Second))
 		})
 	})
+	Context("When testing metrics", func() {
+		It("should have metrics defined with correct parameters", func() {
+			// Check GrafanaReconcilerDuration metric
+			Expect(GrafanaReconcilerDuration).NotTo(BeNil(), "Duration metric should be defined")
 
+			// Check GrafanaReconcilerErrors metric
+			Expect(GrafanaReconcilerErrors).NotTo(BeNil(), "Error metric should be defined")
+
+			// Verify the metric has the correct name and help text
+			errorDesc := GrafanaReconcilerErrors.WithLabelValues("test-ns", "test-name", "test-error").Desc()
+			Expect(errorDesc.String()).To(ContainSubstring("grafana_reconciler_errors_total"))
+			Expect(errorDesc.String()).To(ContainSubstring("Total number of errors in the Grafana reconciler"))
+		})
+
+		It("should be able to observe durations without error", func() {
+			// This test ensures that observing a duration doesn't cause a panic or error
+			Expect(func() {
+				GrafanaReconcilerDuration.WithLabelValues("test-ns", "test-name").Observe(1.5)
+			}).NotTo(Panic())
+		})
+
+		It("should be able to increment error counters without error", func() {
+			// This test ensures that incrementing the error counter doesn't cause a panic or error
+			Expect(func() {
+				GrafanaReconcilerErrors.WithLabelValues("test-ns", "test-name", "test-error").Inc()
+			}).NotTo(Panic())
+		})
+	})
 })

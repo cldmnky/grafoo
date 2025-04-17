@@ -173,4 +173,11 @@ var _ = Describe("MariaDB", func() {
 			Expect(mariadbDeployment.Spec.Template.Spec.Containers[0].Ports[0].ContainerPort).To(Equal(int32(3306)))
 		})
 	})
+	Context("When testing metrics", func() {
+		It("should have metrics defined with correct parameters", func() {
+			Expect(MariaDBReconcilerDuration).ToNot(BeNil())
+			Expect(MariaDBReconcilerDuration.MetricVec).ToNot(BeNil())
+			Expect(MariaDBReconcilerDuration.MetricVec.GetMetricWithLabelValues("namespace", "name", "operation")).ToNot(BeNil())
+		})
+	})
 })

@@ -1,0 +1,7 @@
+p, system:cluster-admin, *, */*, read
+p, authors, *, cluster1/namespace1, read
+p, admin, datasource2, cluster2/namespace2-*, read
+p, alice@example.com, datasource1, cluster1/namespace3, read
+p, kilgore@kilgore.trout, *, cluster1/namespace3, read
+g, alice@example.com, admin
+g, kilgore@kilgore.trout, admin

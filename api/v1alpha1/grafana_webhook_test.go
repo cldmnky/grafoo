@@ -41,7 +41,7 @@ var _ = Describe("Grafana Webhook", func() {
 					},
 				},
 			}
-			warn, err := g.ValidateCreate()
+			warn, err := g.ValidateCreate(ctx, g)
 			Expect(err).NotTo(BeNil())
 			Expect(warn).To(BeNil())
 
@@ -59,7 +59,7 @@ var _ = Describe("Grafana Webhook", func() {
 					},
 				},
 			}
-			warn, err := g.ValidateCreate()
+			warn, err := g.ValidateCreate(ctx, g)
 			Expect(err).NotTo(BeNil())
 			Expect(warn).To(BeNil())
 
@@ -80,7 +80,7 @@ var _ = Describe("Grafana Webhook", func() {
 					},
 				},
 			}
-			warn, err := g.ValidateCreate()
+			warn, err := g.ValidateCreate(ctx, g)
 			Expect(err).NotTo(BeNil())
 			Expect(warn).To(BeNil())
 		})
@@ -103,7 +103,7 @@ var _ = Describe("Grafana Webhook", func() {
 					},
 				},
 			}
-			warn, err := g.ValidateCreate()
+			warn, err := g.ValidateCreate(ctx, g)
 			Expect(err).NotTo(BeNil())
 			Expect(warn).To(BeNil())
 		})
@@ -121,7 +121,7 @@ var _ = Describe("Grafana Webhook", func() {
 					},
 				},
 			}
-			warn, err := g.ValidateCreate()
+			warn, err := g.ValidateCreate(ctx, g)
 			Expect(err).NotTo(BeNil())
 			Expect(warn).To(BeNil())
 		})

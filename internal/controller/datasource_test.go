@@ -185,3 +185,230 @@ var _ = Describe("extractTokenFromSecureJSONData", func() {
 		})
 	})
 })
+
+var _ = Describe("parseURLHostPort", func() {
+	Context("When parsing URLs", func() {
+		It("should parse HTTP URL with explicit port", func() {
+			hostname, port, scheme, err := parseURLHostPort("http://prometheus.default.svc.cluster.local:9090")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(hostname).To(Equal("prometheus.default.svc.cluster.local"))
+			Expect(port).To(Equal(9090))
+			Expect(scheme).To(Equal("http"))
+		})
+
+		It("should parse HTTPS URL with explicit port", func() {
+			hostname, port, scheme, err := parseURLHostPort("https://loki.openshift-logging.svc.cluster.local:3100")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(hostname).To(Equal("loki.openshift-logging.svc.cluster.local"))
+			Expect(port).To(Equal(3100))
+			Expect(scheme).To(Equal("https"))
+		})
+
+		It("should use default HTTP port when not specified", func() {
+			hostname, port, scheme, err := parseURLHostPort("http://prometheus.default.svc.cluster.local")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(hostname).To(Equal("prometheus.default.svc.cluster.local"))
+			Expect(port).To(Equal(80))
+			Expect(scheme).To(Equal("http"))
+		})
+
+		It("should use default HTTPS port when not specified", func() {
+			hostname, port, scheme, err := parseURLHostPort("https://loki.openshift-logging.svc.cluster.local")
+			Expect(err).NotTo(HaveOccurred())
+			Expect(hostname).To(Equal("loki.openshift-logging.svc.cluster.local"))
+			Expect(port).To(Equal(443))
+			Expect(scheme).To(Equal("https"))
+		})
+
+		It("should return error for URL without scheme", func() {
+			// URLs without a scheme like "prometheus.default.svc.cluster.local:9090"
+			// are parsed incorrectly by url.Parse - it treats "prometheus.default.svc.cluster.local"
+			// as the scheme and "9090" as the path
+			_, _, _, err := parseURLHostPort("prometheus.default.svc.cluster.local:9090")
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("should return error for invalid URL", func() {
+			_, _, _, err := parseURLHostPort("://invalid-url")
+			Expect(err).To(HaveOccurred())
+		})
+
+		It("should return error for URL with invalid port", func() {
+			_, _, _, err := parseURLHostPort("http://prometheus.default.svc.cluster.local:invalid")
+			Expect(err).To(HaveOccurred())
+		})
+	})
+})
+
+var _ = Describe("buildDSProxyConfig", func() {
+	Context("When building dsproxy config", func() {
+		var (
+			reconciler *GrafanaReconciler
+			ctx        context.Context
+		)
+
+		BeforeEach(func() {
+			reconciler = &GrafanaReconciler{
+				Client: k8sClient,
+				Scheme: k8sClient.Scheme(),
+			}
+			ctx = context.Background()
+		})
+
+		It("should build config with single Prometheus datasource", func() {
+			instance := &grafoov1alpha1.Grafana{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-grafana",
+					Namespace: "default",
+				},
+				Spec: grafoov1alpha1.GrafanaSpec{
+					DataSources: []grafoov1alpha1.DataSource{
+						{
+							Name:    "Prometheus",
+							Type:    grafoov1alpha1.PrometheusInCluster,
+							Enabled: true,
+							Prometheus: &grafoov1alpha1.PrometheusDS{
+								URL: "http://prometheus.default.svc.cluster.local:9090",
+							},
+						},
+					},
+				},
+			}
+
+			config, err := reconciler.buildDSProxyConfig(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(config.Proxies).To(HaveLen(1))
+			Expect(config.Proxies[0].Domain).To(Equal("prometheus.default.svc.cluster.local"))
+			Expect(config.Proxies[0].Proxies).To(HaveLen(1))
+			Expect(config.Proxies[0].Proxies[0].HTTP).To(ContainElement(9090))
+		})
+
+		It("should build config with multiple datasources", func() {
+			instance := &grafoov1alpha1.Grafana{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-grafana",
+					Namespace: "default",
+				},
+				Spec: grafoov1alpha1.GrafanaSpec{
+					DataSources: []grafoov1alpha1.DataSource{
+						{
+							Name:    "Prometheus",
+							Type:    grafoov1alpha1.PrometheusInCluster,
+							Enabled: true,
+							Prometheus: &grafoov1alpha1.PrometheusDS{
+								URL: "http://prometheus.default.svc.cluster.local:9090",
+							},
+						},
+						{
+							Name:    "Loki",
+							Type:    grafoov1alpha1.LokiInCluster,
+							Enabled: true,
+							Loki: &grafoov1alpha1.LokiDS{
+								URL: "https://loki.openshift-logging.svc.cluster.local:3100",
+							},
+						},
+						{
+							Name:    "Tempo",
+							Type:    grafoov1alpha1.TempoInCluster,
+							Enabled: true,
+							Tempo: &grafoov1alpha1.TempoDS{
+								URL: "https://tempo.tempo-system.svc.cluster.local:3200",
+							},
+						},
+					},
+				},
+			}
+
+			config, err := reconciler.buildDSProxyConfig(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(config.Proxies).To(HaveLen(3))
+		})
+
+		It("should skip disabled datasources", func() {
+			instance := &grafoov1alpha1.Grafana{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-grafana",
+					Namespace: "default",
+				},
+				Spec: grafoov1alpha1.GrafanaSpec{
+					DataSources: []grafoov1alpha1.DataSource{
+						{
+							Name:    "Prometheus",
+							Type:    grafoov1alpha1.PrometheusInCluster,
+							Enabled: true,
+							Prometheus: &grafoov1alpha1.PrometheusDS{
+								URL: "http://prometheus.default.svc.cluster.local:9090",
+							},
+						},
+						{
+							Name:    "Loki",
+							Type:    grafoov1alpha1.LokiInCluster,
+							Enabled: false,
+							Loki: &grafoov1alpha1.LokiDS{
+								URL: "https://loki.openshift-logging.svc.cluster.local:3100",
+							},
+						},
+					},
+				},
+			}
+
+			config, err := reconciler.buildDSProxyConfig(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(config.Proxies).To(HaveLen(1))
+			Expect(config.Proxies[0].Domain).To(Equal("prometheus.default.svc.cluster.local"))
+		})
+
+		It("should group multiple ports for same domain", func() {
+			instance := &grafoov1alpha1.Grafana{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-grafana",
+					Namespace: "default",
+				},
+				Spec: grafoov1alpha1.GrafanaSpec{
+					DataSources: []grafoov1alpha1.DataSource{
+						{
+							Name:    "Prometheus-1",
+							Type:    grafoov1alpha1.PrometheusInCluster,
+							Enabled: true,
+							Prometheus: &grafoov1alpha1.PrometheusDS{
+								URL: "http://prometheus.default.svc.cluster.local:9090",
+							},
+						},
+						{
+							Name:    "Prometheus-2",
+							Type:    grafoov1alpha1.PrometheusInCluster,
+							Enabled: true,
+							Prometheus: &grafoov1alpha1.PrometheusDS{
+								URL: "https://prometheus.default.svc.cluster.local:9091",
+							},
+						},
+					},
+				},
+			}
+
+			config, err := reconciler.buildDSProxyConfig(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(config.Proxies).To(HaveLen(1))
+			Expect(config.Proxies[0].Domain).To(Equal("prometheus.default.svc.cluster.local"))
+			Expect(config.Proxies[0].Proxies).To(HaveLen(1))
+			Expect(config.Proxies[0].Proxies[0].HTTP).To(ContainElement(9090))
+			Expect(config.Proxies[0].Proxies[0].HTTPS).To(ContainElement(9091))
+		})
+
+		It("should return empty config when no enabled datasources", func() {
+			instance := &grafoov1alpha1.Grafana{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:      "test-grafana",
+					Namespace: "default",
+				},
+				Spec: grafoov1alpha1.GrafanaSpec{
+					DataSources: []grafoov1alpha1.DataSource{},
+				},
+			}
+
+			config, err := reconciler.buildDSProxyConfig(ctx, instance)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(config.Proxies).To(BeEmpty())
+		})
+	})
+})

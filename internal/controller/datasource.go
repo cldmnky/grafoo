@@ -4,15 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"strconv"
+	"strings"
 
 	grafanav1beta1 "github.com/grafana/grafana-operator/v5/api/v1beta1"
 	authenticationv1 "k8s.io/api/authentication/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	ctrlutil "sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+	"sigs.k8s.io/yaml"
 
 	grafoov1alpha1 "github.com/cldmnky/grafoo/api/v1alpha1"
 )
@@ -113,13 +118,12 @@ func (r *GrafanaReconciler) ReconcileDataSources(ctx context.Context, instance *
 		}
 	}
 
-	// TODO: Generate dsproxy configuration based on the reconciled datasources.
+	// Generate dsproxy configuration based on the reconciled datasources.
 	// The dsproxy sidecar needs to know which upstream targets to intercept.
-	// 1. Iterate over all active datasources (Prometheus, Loki, Tempo).
-	// 2. Extract the hostname and port from each datasource URL.
-	// 3. Construct the dsproxy configuration (YAML) with the list of proxies.
-	// 4. Create or Update a ConfigMap (e.g., <instance-name>-dsproxy-config) with this configuration.
-	//    This ConfigMap should be mounted into the dsproxy sidecar container.
+	if err := r.reconcileDSProxyConfig(ctx, instance); err != nil {
+		logger.Error(err, "Failed to reconcile dsproxy config")
+		return err
+	}
 
 	return nil
 }
@@ -279,4 +283,203 @@ func extractTokenFromSecureJSONData(secureJSONData json.RawMessage) (string, err
 	}
 
 	return token, nil
+}
+
+// DSProxyConfig represents the dsproxy configuration
+type DSProxyConfig struct {
+	Proxies []DSProxyRule `yaml:"proxies"`
+}
+
+// DSProxyRule defines a rule for redirecting traffic to a specific domain and ports
+type DSProxyRule struct {
+	Domain  string         `yaml:"domain"`
+	Proxies []DSProxyPorts `yaml:"proxies"`
+}
+
+// DSProxyPorts defines the HTTP and HTTPS ports for proxying
+type DSProxyPorts struct {
+	HTTP  []int `yaml:"http,omitempty"`
+	HTTPS []int `yaml:"https,omitempty"`
+}
+
+// parseURLHostPort parses a URL and extracts the hostname and port
+// Returns hostname, port, and scheme (http/https)
+func parseURLHostPort(urlStr string) (string, int, string, error) {
+	parsedURL, err := url.Parse(urlStr)
+	if err != nil {
+		return "", 0, "", fmt.Errorf("failed to parse URL %s: %w", urlStr, err)
+	}
+
+	hostname := parsedURL.Hostname()
+	if hostname == "" {
+		return "", 0, "", fmt.Errorf("empty hostname in URL %s", urlStr)
+	}
+
+	scheme := parsedURL.Scheme
+	if scheme == "" {
+		scheme = "http" // default to http if no scheme specified
+	}
+
+	// Get port, use default ports if not specified
+	portStr := parsedURL.Port()
+	var port int
+	if portStr == "" {
+		// Use default ports based on scheme
+		switch scheme {
+		case "https":
+			port = 443
+		case "http":
+			port = 80
+		default:
+			port = 80
+		}
+	} else {
+		port, err = strconv.Atoi(portStr)
+		if err != nil {
+			return "", 0, "", fmt.Errorf("invalid port in URL %s: %w", urlStr, err)
+		}
+	}
+
+	return hostname, port, scheme, nil
+}
+
+// buildDSProxyConfig builds the dsproxy configuration from the datasources
+func (r *GrafanaReconciler) buildDSProxyConfig(ctx context.Context, instance *grafoov1alpha1.Grafana) (*DSProxyConfig, error) {
+	logger := log.FromContext(ctx)
+
+	// Map to group ports by domain
+	domainMap := make(map[string]map[string]map[int]bool) // domain -> scheme -> port -> exists
+
+	// Iterate through all datasources and extract URLs
+	for _, ds := range instance.Spec.DataSources {
+		if !ds.Enabled {
+			continue
+		}
+
+		var urlStr string
+		switch ds.Type {
+		case grafoov1alpha1.PrometheusInCluster, grafoov1alpha1.PrometheusMcoo:
+			if ds.Prometheus != nil {
+				urlStr = ds.Prometheus.URL
+			}
+		case grafoov1alpha1.LokiInCluster:
+			if ds.Loki != nil {
+				urlStr = ds.Loki.URL
+			}
+		case grafoov1alpha1.TempoInCluster:
+			if ds.Tempo != nil {
+				urlStr = ds.Tempo.URL
+			}
+		}
+
+		if urlStr == "" {
+			logger.Info("Skipping datasource with empty URL", "datasource", ds.Name)
+			continue
+		}
+
+		hostname, port, scheme, err := parseURLHostPort(urlStr)
+		if err != nil {
+			logger.Error(err, "Failed to parse datasource URL", "datasource", ds.Name, "url", urlStr)
+			continue
+		}
+
+		// Normalize scheme to http/https
+		normalizedScheme := "http"
+		if scheme == "https" {
+			normalizedScheme = "https"
+		}
+
+		// Initialize maps if needed
+		if domainMap[hostname] == nil {
+			domainMap[hostname] = make(map[string]map[int]bool)
+		}
+		if domainMap[hostname][normalizedScheme] == nil {
+			domainMap[hostname][normalizedScheme] = make(map[int]bool)
+		}
+
+		// Add port to the map
+		domainMap[hostname][normalizedScheme][port] = true
+		logger.Info("Added datasource to dsproxy config", "datasource", ds.Name, "hostname", hostname, "port", port, "scheme", normalizedScheme)
+	}
+
+	// Build the DSProxyConfig from the map
+	config := &DSProxyConfig{
+		Proxies: []DSProxyRule{},
+	}
+
+	for domain, schemes := range domainMap {
+		rule := DSProxyRule{
+			Domain:  domain,
+			Proxies: []DSProxyPorts{},
+		}
+
+		ports := DSProxyPorts{}
+
+		// Collect HTTP ports
+		if httpPorts, ok := schemes["http"]; ok {
+			for port := range httpPorts {
+				ports.HTTP = append(ports.HTTP, port)
+			}
+		}
+
+		// Collect HTTPS ports
+		if httpsPorts, ok := schemes["https"]; ok {
+			for port := range httpsPorts {
+				ports.HTTPS = append(ports.HTTPS, port)
+			}
+		}
+
+		// Only add the rule if there are ports
+		if len(ports.HTTP) > 0 || len(ports.HTTPS) > 0 {
+			rule.Proxies = append(rule.Proxies, ports)
+			config.Proxies = append(config.Proxies, rule)
+		}
+	}
+
+	return config, nil
+}
+
+// reconcileDSProxyConfig creates or updates the ConfigMap containing the dsproxy configuration
+func (r *GrafanaReconciler) reconcileDSProxyConfig(ctx context.Context, instance *grafoov1alpha1.Grafana) error {
+	logger := log.FromContext(ctx)
+
+	// Build the dsproxy configuration
+	config, err := r.buildDSProxyConfig(ctx, instance)
+	if err != nil {
+		return fmt.Errorf("failed to build dsproxy config: %w", err)
+	}
+
+	// Marshal to YAML
+	configYAML, err := yaml.Marshal(config)
+	if err != nil {
+		return fmt.Errorf("failed to marshal dsproxy config to YAML: %w", err)
+	}
+
+	// Create or update the ConfigMap
+	configMap := &corev1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      r.generateNameForComponent(instance, "dsproxy-config"),
+			Namespace: instance.Namespace,
+		},
+	}
+
+	op, err := CreateOrUpdateWithRetries(ctx, r.Client, configMap, func() error {
+		configMap.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "dsproxy")
+		configMap.Data = map[string]string{
+			"dsproxy.yaml": strings.TrimSpace(string(configYAML)),
+		}
+		return ctrl.SetControllerReference(instance, configMap, r.Scheme)
+	})
+
+	if err != nil {
+		return fmt.Errorf("failed to create or update dsproxy ConfigMap: %w", err)
+	}
+
+	if op == ctrlutil.OperationResultCreated {
+		logger.Info("Created dsproxy ConfigMap")
+	} else if op == ctrlutil.OperationResultUpdated {
+		logger.Info("Updated dsproxy ConfigMap")
+	}
+
+	return nil
 }

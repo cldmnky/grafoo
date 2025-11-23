@@ -79,29 +79,24 @@ spec:
     - name: dsproxy-config
       configMap:
         name: my-grafana-dsproxy-config
-    - name: dsproxy-policy
-      configMap:
-        name: dsproxy-policy  # Your authorization policies
   
-  initContainers:
-    - name: dsproxy-setup
+  containers:
+    - name: dsproxy
       image: quay.io/cldmnky/dsproxy:latest
       args:
         - --config=/etc/dsproxy/config/dsproxy.yaml
         - --iptables=true
-        - --policy-path=/etc/dsproxy/policy
         - --jwks-url=https://oauth-openshift.apps.cluster.local/.well-known/openid-configuration
-        - --injection-label=namespace
+        - --policy-path=/etc/dsproxy/policy
+        - --token-review=true
+        - --jwt-audience=grafana
       securityContext:
         capabilities:
           add: ["NET_ADMIN"]  # Required for iptables manipulation
       volumeMounts:
         - name: dsproxy-config
           mountPath: /etc/dsproxy/config
-        - name: dsproxy-policy
-          mountPath: /etc/dsproxy/policy
-  
-  containers:
+    
     - name: grafana
       image: grafana/grafana:latest
       # Grafana's outbound traffic to datasources will be automatically intercepted

@@ -264,6 +264,14 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			})
 		}
 	}
+
+	// Reconcile DSProxy ConfigMap before Grafana deployment
+	// This ensures the ConfigMap exists before the pod tries to mount it
+	if err := r.reconcileDSProxyConfig(ctx, grafooInstance); err != nil {
+		logger.Error(err, "Failed to reconcile dsproxy config")
+		GrafanaReconcilerErrors.WithLabelValues(req.Namespace, req.Name, "dsproxy_config_reconciliation_failed").Inc()
+	}
+
 	// Reconcile Grafana
 	if err := r.ReconcileGrafana(ctx, grafooInstance); err != nil {
 		logger.Error(err, "Failed to reconcile grafana")

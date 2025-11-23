@@ -206,20 +206,19 @@ func (p *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if !exists {
 		p.mu.Lock()
-		// Double check
+		defer p.mu.Unlock()
+		// Double check: verify handler doesn't exist after acquiring write lock
 		if handler, exists = p.handlers[host]; !exists {
 			var err error
 			upstreamURL := fmt.Sprintf("%s://%s", p.scheme, host)
 			handler, err = newPrometheusProxy(upstreamURL, p.label)
 			if err != nil {
-				p.mu.Unlock()
 				log.Printf("Failed to create proxy for %s: %v", upstreamURL, err)
 				http.Error(w, "Failed to create proxy", http.StatusInternalServerError)
 				return
 			}
 			p.handlers[host] = handler
 		}
-		p.mu.Unlock()
 	}
 
 	handler.ServeHTTP(w, r)

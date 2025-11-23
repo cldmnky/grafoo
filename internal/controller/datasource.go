@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/url"
+	"sort"
 	"strconv"
 
 	grafanav1beta1 "github.com/grafana/grafana-operator/v5/api/v1beta1"
@@ -115,13 +116,6 @@ func (r *GrafanaReconciler) ReconcileDataSources(ctx context.Context, instance *
 				return err
 			}
 		}
-	}
-
-	// Generate dsproxy configuration based on the reconciled datasources.
-	// The dsproxy sidecar needs to know which upstream targets to intercept.
-	if err := r.reconcileDSProxyConfig(ctx, instance); err != nil {
-		logger.Error(err, "Failed to reconcile dsproxy config")
-		return err
 	}
 
 	return nil
@@ -421,7 +415,15 @@ func (r *GrafanaReconciler) buildDSProxyConfig(ctx context.Context, instance *gr
 		Proxies: []DSProxyRule{},
 	}
 
-	for domain, schemes := range domainMap {
+	// Sort domains for deterministic output
+	domains := make([]string, 0, len(domainMap))
+	for domain := range domainMap {
+		domains = append(domains, domain)
+	}
+	sort.Strings(domains)
+
+	for _, domain := range domains {
+		schemes := domainMap[domain]
 		rule := DSProxyRule{
 			Domain:  domain,
 			Proxies: []DSProxyPorts{},
@@ -429,18 +431,20 @@ func (r *GrafanaReconciler) buildDSProxyConfig(ctx context.Context, instance *gr
 
 		ports := DSProxyPorts{}
 
-		// Collect HTTP ports
+		// Collect and sort HTTP ports
 		if httpPorts, ok := schemes["http"]; ok {
 			for port := range httpPorts {
 				ports.HTTP = append(ports.HTTP, port)
 			}
+			sort.Ints(ports.HTTP)
 		}
 
-		// Collect HTTPS ports
+		// Collect and sort HTTPS ports
 		if httpsPorts, ok := schemes["https"]; ok {
 			for port := range httpsPorts {
 				ports.HTTPS = append(ports.HTTPS, port)
 			}
+			sort.Ints(ports.HTTPS)
 		}
 
 		// Only add the rule if there are ports
@@ -455,6 +459,11 @@ func (r *GrafanaReconciler) buildDSProxyConfig(ctx context.Context, instance *gr
 
 // reconcileDSProxyConfig creates or updates the ConfigMap containing the dsproxy configuration
 func (r *GrafanaReconciler) reconcileDSProxyConfig(ctx context.Context, instance *grafoov1alpha1.Grafana) error {
+	// Skip if dsproxy is not enabled
+	if !instance.Spec.EnableDSProxy {
+		return nil
+	}
+
 	logger := log.FromContext(ctx)
 
 	// Build the dsproxy configuration

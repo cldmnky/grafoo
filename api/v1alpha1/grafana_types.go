@@ -28,7 +28,7 @@ type GrafanaSpec struct {
 	// Version is the version of Grafana to deploy
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:validation:Pattern="^([0-9]+(\\.[0-9]+){0,2})$"
-	// +kubebuilder:default="9.5.17"
+	// +kubebuilder:default="12.3.0"
 	Version string `json:"version,omitempty"`
 	// Replicas is the number of replicas for the Grafana deployment
 	// +kubebuilder:validation:Required

@@ -567,6 +567,9 @@ func (r *GrafanaReconciler) buildMariaDBDeploymentSpec(instance *grafoov1alpha1.
 								Drop: []corev1.Capability{"ALL"},
 							},
 							RunAsNonRoot: boolPtr(true),
+							SeccompProfile: &corev1.SeccompProfile{
+								Type: corev1.SeccompProfileTypeRuntimeDefault,
+							},
 						},
 						VolumeMounts: []corev1.VolumeMount{
 							{

@@ -452,6 +452,9 @@ func (r *GrafanaReconciler) reconcileDexDeployment(ctx context.Context, instance
 								},
 							},
 							RunAsNonRoot: boolPtr(true),
+							SeccompProfile: &corev1.SeccompProfile{
+								Type: corev1.SeccompProfileTypeRuntimeDefault,
+							},
 						},
 						VolumeMounts: []corev1.VolumeMount{{
 							Name:      "config-volume",

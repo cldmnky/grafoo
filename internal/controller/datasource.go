@@ -157,8 +157,14 @@ func (r *GrafanaReconciler) reconcilePrometheusDataSource(ctx context.Context, i
 			JSONData:       json.RawMessage(`{"httpHeaderName1": "Authorization", "tlsSkipVerify": true}`),
 			SecureJSONData: secureJSONData,
 		},
-		InstanceSelector: &metav1.LabelSelector{
-			MatchLabels: r.generateLabelsForComponent(instance, "grafana"),
+		GrafanaCommonSpec: grafanav1beta1.GrafanaCommonSpec{
+			InstanceSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app.kubernetes.io/name":      "grafana",
+					"app.kubernetes.io/instance":  instance.Name,
+					"app.kubernetes.io/component": "grafana",
+				},
+			},
 		},
 	}
 	op, err := CreateOrUpdateWithRetries(ctx, r.Client, promDataSource, func() error {
@@ -196,8 +202,14 @@ func (r *GrafanaReconciler) reconcileLokiDataSource(ctx context.Context, instanc
 			JSONData:       json.RawMessage(`{"httpHeaderName1": "Authorization", "tlsSkipVerify": true}`),
 			SecureJSONData: json.RawMessage(`{"httpHeaderValue1": "Bearer ` + token + `"}`),
 		},
-		InstanceSelector: &metav1.LabelSelector{
-			MatchLabels: r.generateLabelsForComponent(instance, "grafana"),
+		GrafanaCommonSpec: grafanav1beta1.GrafanaCommonSpec{
+			InstanceSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app.kubernetes.io/name":      "grafana",
+					"app.kubernetes.io/instance":  instance.Name,
+					"app.kubernetes.io/component": "grafana",
+				},
+			},
 		},
 	}
 	op, err := CreateOrUpdateWithRetries(ctx, r.Client, lokiDataSource, func() error {
@@ -236,8 +248,14 @@ func (r *GrafanaReconciler) reconcileTempoDataSource(ctx context.Context, instan
 			JSONData:       json.RawMessage(`{"httpHeaderName1": "Authorization", "tlsSkipVerify": true}`),
 			SecureJSONData: json.RawMessage(`{"httpHeaderValue1": "Bearer ` + token + `"}`),
 		},
-		InstanceSelector: &metav1.LabelSelector{
-			MatchLabels: r.generateLabelsForComponent(instance, "grafana"),
+		GrafanaCommonSpec: grafanav1beta1.GrafanaCommonSpec{
+			InstanceSelector: &metav1.LabelSelector{
+				MatchLabels: map[string]string{
+					"app.kubernetes.io/name":      "grafana",
+					"app.kubernetes.io/instance":  instance.Name,
+					"app.kubernetes.io/component": "grafana",
+				},
+			},
 		},
 	}
 	op, err := CreateOrUpdateWithRetries(ctx, r.Client, tempoDataSource, func() error {

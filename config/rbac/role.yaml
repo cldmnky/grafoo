@@ -144,6 +144,14 @@ rules:
 - apiGroups:
   - grafoo.cloudmonkey.org
   resources:
+  - grafanadatasourcerules
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - grafoo.cloudmonkey.org
+  resources:
   - grafanas
   verbs:
   - create
@@ -253,6 +261,14 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - security.openshift.io
+  resourceNames:
+  - privileged
+  resources:
+  - securitycontextconstraints
+  verbs:
+  - use
 - apiGroups:
   - tempo.grafana.com
   resourceNames:

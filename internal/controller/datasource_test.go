@@ -82,7 +82,7 @@ var _ = Describe("Datasource Controller", func() {
 				err = k8sClient.Update(ctx, grafana)
 				g.Expect(err).NotTo(HaveOccurred())
 				return nil
-			}, time.Minute, time.Second).Should(Succeed())
+			}, time.Second*10, time.Second).Should(Succeed())
 			// Get the Grafana instance
 			err := k8sClient.Get(ctx, typeNamespacedName, grafana)
 			dsHashName := grafana.Spec.DataSources[0].GetDataSourceNameHash()
@@ -95,7 +95,7 @@ var _ = Describe("Datasource Controller", func() {
 				}, grafanaOperatedDS)
 				g.Expect(err).NotTo(HaveOccurred())
 				return nil
-			}, time.Minute, time.Second).Should(Succeed())
+			}, time.Second*10, time.Second).Should(Succeed())
 		})
 		It("should successfully delete a data source", func() {
 			// Get the Grafana instance
@@ -116,7 +116,7 @@ var _ = Describe("Datasource Controller", func() {
 				err = k8sClient.Update(ctx, grafana)
 				g.Expect(err).NotTo(HaveOccurred())
 				return nil
-			}, time.Minute, time.Second).Should(Succeed())
+			}, time.Second*10, time.Second).Should(Succeed())
 			// Get the Grafana instance
 			err := k8sClient.Get(ctx, typeNamespacedName, grafana)
 			dsHashName := grafana.Spec.DataSources[0].GetDataSourceNameHash()
@@ -129,7 +129,7 @@ var _ = Describe("Datasource Controller", func() {
 				}, grafanaOperatedDS)
 				g.Expect(err).NotTo(HaveOccurred())
 				return nil
-			}, time.Minute, time.Second).Should(Succeed())
+			}, time.Second*10, time.Second).Should(Succeed())
 			Eventually(func(g Gomega) error {
 				err := k8sClient.Get(ctx, typeNamespacedName, grafana)
 				g.Expect(err).NotTo(HaveOccurred())
@@ -137,14 +137,14 @@ var _ = Describe("Datasource Controller", func() {
 				err = k8sClient.Update(ctx, grafana)
 				g.Expect(err).NotTo(HaveOccurred())
 				return nil
-			}, time.Minute, time.Second).Should(Succeed())
+			}, time.Second*10, time.Second).Should(Succeed())
 			Expect(err).NotTo(HaveOccurred())
 			By("Checking the grafana instance")
 			Eventually(func(g Gomega) error {
 				err := k8sClient.Get(ctx, typeNamespacedName, grafana)
 				g.Expect(err).NotTo(HaveOccurred())
 				return nil
-			}, time.Minute, time.Second).Should(Succeed())
+			}, time.Second*10, time.Second).Should(Succeed())
 			By("Checking the deleted GrafanaDatasource")
 			Eventually(func(g Gomega) error {
 				err := k8sClient.Get(ctx, types.NamespacedName{
@@ -153,7 +153,7 @@ var _ = Describe("Datasource Controller", func() {
 				}, grafanaOperatedDS)
 				g.Expect(errors.IsNotFound(err)).To(BeTrue())
 				return nil
-			}, time.Minute, time.Second).Should(Succeed())
+			}, time.Second*10, time.Second).Should(Succeed())
 		})
 		It("should successfully create a dsproxy ConfigMap with correct configuration", func() {
 			// Get the Grafana instance and add datasources
@@ -182,7 +182,7 @@ var _ = Describe("Datasource Controller", func() {
 				err = k8sClient.Update(ctx, grafana)
 				g.Expect(err).NotTo(HaveOccurred())
 				return nil
-			}, time.Minute, time.Second).Should(Succeed())
+			}, time.Second*10, time.Second).Should(Succeed())
 
 			// Wait for the datasources to be created
 			promDSHashName := grafana.Spec.DataSources[0].GetDataSourceNameHash()
@@ -197,7 +197,7 @@ var _ = Describe("Datasource Controller", func() {
 				}, grafanaOperatedPromDS)
 				g.Expect(err).NotTo(HaveOccurred())
 				return nil
-			}, time.Minute, time.Second).Should(Succeed())
+			}, time.Second*10, time.Second).Should(Succeed())
 
 			By("Waiting for Loki datasource to be created")
 			grafanaOperatedLokiDS := &grafanav1beta1.GrafanaDatasource{}
@@ -208,7 +208,7 @@ var _ = Describe("Datasource Controller", func() {
 				}, grafanaOperatedLokiDS)
 				g.Expect(err).NotTo(HaveOccurred())
 				return nil
-			}, time.Minute, time.Second).Should(Succeed())
+			}, time.Second*10, time.Second).Should(Succeed())
 
 			// Wait for the ConfigMap to be created with correct content
 			By("Waiting for dsproxy ConfigMap to be created with correct configuration")
@@ -232,7 +232,7 @@ var _ = Describe("Datasource Controller", func() {
 				g.Expect(config.Proxies).To(HaveLen(2), "Expected 2 proxy rules in dsproxy config")
 
 				return nil
-			}, time.Minute, time.Second).Should(Succeed())
+			}, time.Second*10, time.Second).Should(Succeed())
 
 			// Verify the domains are present
 			var config DSProxyConfig

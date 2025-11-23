@@ -115,7 +115,7 @@ vet: ## Run go vet against code.
 
 .PHONY: test
 test: manifests generate fmt vet envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list -f '{{if .TestGoFiles}}{{.ImportPath}}{{end}}' ./... | grep -v /e2e) -coverprofile cover.out
 
 # Utilize Kind or modify the e2e tests to load the image locally, enabling compatibility with other vendors.
 .PHONY: test-e2e  # Run the e2e tests against a Kind k8s instance that is spun up.
@@ -187,13 +187,8 @@ docker-build:  manifests generate fmt vet ko ## Build docker image with the mana
 		./cmd/grafoo
 
 .PHONY: docker-build-dsproxy
-docker-build-dsproxy: manifests generate fmt vet ui-build ko ## Build docker image with the dsproxy.
-	KO_DOCKER_REPO=$(IMAGE_TAG_BASE)-dsproxy \
-	KO_DEFAULTBASEIMAGE=registry.access.redhat.com/ubi9/ubi:9.4 \
-	$(KO) build --platform linux/amd64,linux/arm64 \
-		--preserve-import-paths=false \
-		--bare=true \
-		./cmd/dsproxy
+docker-build-dsproxy: manifests generate ## Build docker image with the dsproxy.
+	$(CONTAINER_TOOL) build --platform linux/amd64,linux/arm64 -t ${DSPROXY_IMG} -f cmd/dsproxy/Dockerfile .
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
@@ -202,6 +197,9 @@ docker-push: ## Push docker image with the manager.
 .PHONY: docker-push-dsproxy
 docker-push-dsproxy: ## Push docker image with the dsproxy.
 	$(CONTAINER_TOOL) push ${DSPROXY_IMG}
+
+.PHONY: containers
+containers: docker-build docker-build-dsproxy ## Build and push all images.
 
 ##@ Deployment
 

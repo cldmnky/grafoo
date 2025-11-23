@@ -1,8 +1,6 @@
 module github.com/cldmnky/grafoo
 
-go 1.24.0
-
-toolchain go1.24.6
+go 1.25.0
 
 replace (
 	github.com/envoyproxy/envoy => github.com/envoyproxy/envoy v1.34.0
@@ -11,9 +9,9 @@ replace (
 )
 
 require (
-	github.com/grafana/grafana-operator/v5 v5.9.1
-	github.com/onsi/ginkgo/v2 v2.22.0
-	github.com/onsi/gomega v1.36.1
+	github.com/grafana/grafana-operator/v5 v5.20.0
+	github.com/onsi/ginkgo/v2 v2.26.0
+	github.com/onsi/gomega v1.38.2
 	k8s.io/api v0.34.1
 	k8s.io/apimachinery v0.34.1
 	k8s.io/client-go v0.34.1
@@ -31,6 +29,7 @@ require (
 
 require (
 	cel.dev/expr v0.24.0 // indirect
+	github.com/Masterminds/semver/v3 v3.4.0 // indirect
 	github.com/antlr4-go/antlr/v4 v4.13.0 // indirect
 	github.com/bmatcuk/doublestar/v4 v4.6.1 // indirect
 	github.com/casbin/govaluate v1.3.0 // indirect
@@ -62,8 +61,10 @@ require (
 	github.com/x448/float16 v0.8.4 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.uber.org/atomic v1.11.0 // indirect
+	go.uber.org/automaxprocs v1.6.0 // indirect
 	go.yaml.in/yaml/v2 v2.4.3 // indirect
 	go.yaml.in/yaml/v3 v3.0.4 // indirect
+	golang.org/x/mod v0.30.0 // indirect
 	google.golang.org/protobuf v1.36.10 // indirect
 	gopkg.in/evanphx/json-patch.v4 v4.12.0 // indirect
 	sigs.k8s.io/randfill v1.0.0 // indirect
@@ -74,7 +75,6 @@ require (
 	github.com/MicahParks/keyfunc/v2 v2.1.0
 	github.com/asaskevich/govalidator v0.0.0-20230301143203-a9d515a09cc2 // indirect
 	github.com/beorn7/perks v1.0.1 // indirect
-	github.com/blang/semver v3.5.1+incompatible // indirect
 	github.com/blang/semver/v4 v4.0.0 // indirect
 	github.com/casbin/casbin/v2 v2.105.0
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
@@ -103,7 +103,7 @@ require (
 	github.com/google/gnostic-models v0.7.0 // indirect
 	github.com/google/go-cmp v0.7.0 // indirect
 	github.com/google/pprof v0.0.0-20250923004556-9e5a51aed1e8 // indirect
-	github.com/grafana/grafana-openapi-client-go v0.0.0-20240430202104-3ad0f7e4ee52 // indirect
+	github.com/grafana/grafana-openapi-client-go v0.0.0-20250828163705-969607f81baa // indirect
 	github.com/grpc-ecosystem/grpc-gateway/v2 v2.27.2 // indirect
 	github.com/json-iterator/go v1.1.12 // indirect
 	github.com/modern-go/concurrent v0.0.0-20180306012644-bacd9c7ef1dd // indirect

@@ -356,6 +356,12 @@ var _ = Describe("parseURLHostPort", func() {
 			_, _, _, err := parseURLHostPort("http://prometheus.default.svc.cluster.local:invalid")
 			Expect(err).To(HaveOccurred())
 		})
+
+		It("should return error for URL with invalid scheme", func() {
+			_, _, _, err := parseURLHostPort("ftp://prometheus.default.svc.cluster.local:9090")
+			Expect(err).To(HaveOccurred())
+			Expect(err.Error()).To(ContainSubstring("scheme must be http or https"))
+		})
 	})
 })
 

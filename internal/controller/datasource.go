@@ -317,7 +317,12 @@ func parseURLHostPort(urlStr string) (string, int, string, error) {
 
 	scheme := parsedURL.Scheme
 	if scheme == "" {
-		scheme = "http" // default to http if no scheme specified
+		return "", 0, "", fmt.Errorf("URL must include scheme (http:// or https://): %s", urlStr)
+	}
+
+	// Validate scheme
+	if scheme != "http" && scheme != "https" {
+		return "", 0, "", fmt.Errorf("URL scheme must be http or https, got: %s", scheme)
 	}
 
 	// Get port, use default ports if not specified
@@ -329,8 +334,6 @@ func parseURLHostPort(urlStr string) (string, int, string, error) {
 		case "https":
 			port = 443
 		case "http":
-			port = 80
-		default:
 			port = 80
 		}
 	} else {

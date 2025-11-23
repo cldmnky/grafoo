@@ -118,6 +118,10 @@ spec:
                   and dex.<IngressDomain>.
                 pattern: ^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$
                 type: string
+              enableDSProxy:
+                default: false
+                description: Enable DSProxy sidecar
+                type: boolean
               enableMCOO:
                 default: false
                 description: Enable multicluster observability operator

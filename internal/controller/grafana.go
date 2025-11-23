@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	grafoov1alpha1 "github.com/cldmnky/grafoo/api/v1alpha1"
+	"github.com/cldmnky/grafoo/internal/config"
 )
 
 func (r *GrafanaReconciler) ReconcileGrafana(ctx context.Context, instance *grafoov1alpha1.Grafana) error {
@@ -124,12 +125,56 @@ func (r *GrafanaReconciler) buildGrafanaSpec(ctx context.Context, instance *graf
 	}
 	grafanaRouteDomain := u.Hostname()
 
+	deploymentSpec := grafanav1beta1.DeploymentV1Spec{
+		Replicas: instance.Spec.Replicas,
+	}
+
+	if instance.Spec.EnableDSProxy {
+		deploymentSpec.Template = &grafanav1beta1.DeploymentV1PodTemplateSpec{
+			Spec: &grafanav1beta1.DeploymentV1PodSpec{
+				Containers: []corev1.Container{
+					{
+						Name:  "dsproxy",
+						Image: config.DSProxyImage,
+						SecurityContext: &corev1.SecurityContext{
+							Capabilities: &corev1.Capabilities{
+								Add: []corev1.Capability{"NET_ADMIN"},
+							},
+						},
+						Args: []string{
+							"--config=/etc/dsproxy/config/dsproxy.yaml",
+							"--iptables=true",
+							"--jwks-url=" + r.generateRouteUriForComponent(ctx, instance, "dex") + "/keys",
+							"--policy-path=/etc/dsproxy/policy",
+						},
+						VolumeMounts: []corev1.VolumeMount{
+							{
+								Name:      "dsproxy-config",
+								MountPath: "/etc/dsproxy/config",
+							},
+						},
+					},
+				},
+				Volumes: []corev1.Volume{
+					{
+						Name: "dsproxy-config",
+						VolumeSource: corev1.VolumeSource{
+							ConfigMap: &corev1.ConfigMapVolumeSource{
+								LocalObjectReference: corev1.LocalObjectReference{
+									Name: r.generateNameForComponent(instance, "dsproxy-config"),
+								},
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
 	return grafanav1beta1.GrafanaSpec{
 		Version: instance.Spec.Version,
 		Deployment: &grafanav1beta1.DeploymentV1{
-			Spec: grafanav1beta1.DeploymentV1Spec{
-				Replicas: instance.Spec.Replicas,
-			},
+			Spec: deploymentSpec,
 		},
 		Route: &grafanav1beta1.RouteOpenshiftV1{
 			Spec: &grafanav1beta1.RouteOpenShiftV1Spec{

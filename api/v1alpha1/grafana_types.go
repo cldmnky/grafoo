@@ -57,6 +57,10 @@ type GrafanaSpec struct {
 	// +kubebuilder:validation:Optional
 	// +kubebuilder:default=false
 	EnableMCOO bool `json:"enableMCOO,omitempty"`
+	// Enable DSProxy sidecar
+	// +kubebuilder:validation:Optional
+	// +kubebuilder:default=false
+	EnableDSProxy bool `json:"enableDSProxy,omitempty"`
 	// DataSources is the configuration for the DataSources
 	// +kubebuilder:validation:Optional
 	DataSources []DataSource `json:"datasources,omitempty"`

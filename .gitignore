@@ -24,3 +24,5 @@ go.work.sum
 bin/*
 
 dist/
+
+.mcp-debug-tools/

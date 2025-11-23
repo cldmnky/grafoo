@@ -165,9 +165,13 @@ release: semver
 build: manifests generate fmt vet ## Build manager binary.
 	go build -o bin/manager cmd/grafoo/main.go
 
+.PHONY: ui-build
+ui-build: ## Build the UI assets.
+	cd cmd/dsproxy/ui && npm install && npm run build
+
 .PHONY: build-dsproxy
-build-dsproxy: manifests generate fmt vet ## Build dsproxy binary.
-	go build -o bin/dsproxy cmd/dsproxy/main.go
+build-dsproxy: manifests generate fmt vet ui-build ## Build dsproxy binary.
+	go build -o bin/dsproxy ./cmd/dsproxy
 
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
@@ -183,7 +187,7 @@ docker-build:  manifests generate fmt vet ko ## Build docker image with the mana
 		./cmd/grafoo
 
 .PHONY: docker-build-dsproxy
-docker-build-dsproxy: manifests generate fmt vet ko ## Build docker image with the dsproxy.
+docker-build-dsproxy: manifests generate fmt vet ui-build ko ## Build docker image with the dsproxy.
 	KO_DOCKER_REPO=$(IMAGE_TAG_BASE)-dsproxy \
 	KO_DEFAULTBASEIMAGE=registry.access.redhat.com/ubi9/ubi:9.4 \
 	$(KO) build --platform linux/amd64,linux/arm64 \

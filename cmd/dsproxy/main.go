@@ -236,6 +236,15 @@ func getenvBoolOrDefault(envVar string, fallback bool) bool {
 	return fallback
 }
 
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		log.Printf("Started %s %s", r.Method, r.URL.Path)
+		next.ServeHTTP(w, r)
+		log.Printf("Completed %s %s in %v", r.Method, r.URL.Path, time.Since(start))
+	})
+}
+
 func startServers(authzService *AuthzService, httpProxy, httpsProxy http.Handler, k8sClient client.Client) (httpServer, httpsServer *http.Server) {
 	// API Handler
 	apiMux := http.NewServeMux()
@@ -276,7 +285,7 @@ func startServers(authzService *AuthzService, httpProxy, httpsProxy http.Handler
 
 	httpServer = &http.Server{
 		Addr:    fmt.Sprintf("127.0.0.1:%d", redirectPortHTTP),
-		Handler: mainHandler,
+		Handler: loggingMiddleware(mainHandler),
 	}
 	log.Println("Starting HTTP server on port", redirectPortHTTP)
 
@@ -308,7 +317,7 @@ func startServers(authzService *AuthzService, httpProxy, httpsProxy http.Handler
 
 		httpsServer = &http.Server{
 			Addr:    fmt.Sprintf("127.0.0.1:%d", redirectPortHTTPS),
-			Handler: httpsMainHandler,
+			Handler: loggingMiddleware(httpsMainHandler),
 		}
 		log.Println("Starting HTTPS server on port", redirectPortHTTPS)
 		go func() {

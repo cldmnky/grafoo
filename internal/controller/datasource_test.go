@@ -7,9 +7,11 @@ import (
 	grafanav1beta1 "github.com/grafana/grafana-operator/v5/api/v1beta1"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"sigs.k8s.io/yaml"
 
 	grafoov1alpha1 "github.com/cldmnky/grafoo/api/v1alpha1"
 )
@@ -152,6 +154,123 @@ var _ = Describe("Datasource Controller", func() {
 				g.Expect(errors.IsNotFound(err)).To(BeTrue())
 				return nil
 			}, time.Minute, time.Second).Should(Succeed())
+		})
+		It("should successfully create a dsproxy ConfigMap with correct configuration", func() {
+			// Get the Grafana instance and add datasources
+			Eventually(func(g Gomega) error {
+				err := k8sClient.Get(ctx, typeNamespacedName, grafana)
+				g.Expect(err).NotTo(HaveOccurred())
+				// Add multiple datasources to test configuration generation
+				grafana.Spec.DataSources = []grafoov1alpha1.DataSource{
+					{
+						Name:    "Prometheus",
+						Type:    "prometheus-incluster",
+						Enabled: true,
+						Prometheus: &grafoov1alpha1.PrometheusDS{
+							URL: "http://prometheus.default.svc.cluster.local:9090",
+						},
+					},
+					{
+						Name:    "Loki",
+						Type:    "loki-incluster",
+						Enabled: true,
+						Loki: &grafoov1alpha1.LokiDS{
+							URL: "https://loki.openshift-logging.svc.cluster.local:3100",
+						},
+					},
+				}
+				err = k8sClient.Update(ctx, grafana)
+				g.Expect(err).NotTo(HaveOccurred())
+				return nil
+			}, time.Minute, time.Second).Should(Succeed())
+
+			// Wait for the datasources to be created
+			promDSHashName := grafana.Spec.DataSources[0].GetDataSourceNameHash()
+			lokiDSHashName := grafana.Spec.DataSources[1].GetDataSourceNameHash()
+
+			By("Waiting for Prometheus datasource to be created")
+			grafanaOperatedPromDS := &grafanav1beta1.GrafanaDatasource{}
+			Eventually(func(g Gomega) error {
+				err := k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resourceName + "-" + promDSHashName,
+					Namespace: "default",
+				}, grafanaOperatedPromDS)
+				g.Expect(err).NotTo(HaveOccurred())
+				return nil
+			}, time.Minute, time.Second).Should(Succeed())
+
+			By("Waiting for Loki datasource to be created")
+			grafanaOperatedLokiDS := &grafanav1beta1.GrafanaDatasource{}
+			Eventually(func(g Gomega) error {
+				err := k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resourceName + "-" + lokiDSHashName,
+					Namespace: "default",
+				}, grafanaOperatedLokiDS)
+				g.Expect(err).NotTo(HaveOccurred())
+				return nil
+			}, time.Minute, time.Second).Should(Succeed())
+
+			// Wait for the ConfigMap to be created with correct content
+			By("Waiting for dsproxy ConfigMap to be created with correct configuration")
+			dsproxyConfigMap := &corev1.ConfigMap{}
+			Eventually(func(g Gomega) error {
+				err := k8sClient.Get(ctx, types.NamespacedName{
+					Name:      resourceName + "-dsproxy-config",
+					Namespace: "default",
+				}, dsproxyConfigMap)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				// Verify the ConfigMap has the correct data
+				g.Expect(dsproxyConfigMap.Data).To(HaveKey("dsproxy.yaml"))
+
+				// Parse the YAML and verify structure
+				var config DSProxyConfig
+				err = yaml.Unmarshal([]byte(dsproxyConfigMap.Data["dsproxy.yaml"]), &config)
+				g.Expect(err).NotTo(HaveOccurred())
+
+				// Should have 2 proxy rules (one for Prometheus, one for Loki)
+				g.Expect(config.Proxies).To(HaveLen(2), "Expected 2 proxy rules in dsproxy config")
+
+				return nil
+			}, time.Minute, time.Second).Should(Succeed())
+
+			// Verify the domains are present
+			var config DSProxyConfig
+			err := yaml.Unmarshal([]byte(dsproxyConfigMap.Data["dsproxy.yaml"]), &config)
+			Expect(err).NotTo(HaveOccurred())
+
+			domains := make([]string, len(config.Proxies))
+			for i, proxy := range config.Proxies {
+				domains[i] = proxy.Domain
+			}
+			Expect(domains).To(ContainElements(
+				"prometheus.default.svc.cluster.local",
+				"loki.openshift-logging.svc.cluster.local",
+			))
+
+			// Find and verify Prometheus configuration
+			var promConfig *DSProxyRule
+			for i := range config.Proxies {
+				if config.Proxies[i].Domain == "prometheus.default.svc.cluster.local" {
+					promConfig = &config.Proxies[i]
+					break
+				}
+			}
+			Expect(promConfig).NotTo(BeNil())
+			Expect(promConfig.Proxies).To(HaveLen(1))
+			Expect(promConfig.Proxies[0].HTTP).To(ContainElement(9090))
+
+			// Find and verify Loki configuration
+			var lokiConfig *DSProxyRule
+			for i := range config.Proxies {
+				if config.Proxies[i].Domain == "loki.openshift-logging.svc.cluster.local" {
+					lokiConfig = &config.Proxies[i]
+					break
+				}
+			}
+			Expect(lokiConfig).NotTo(BeNil())
+			Expect(lokiConfig.Proxies).To(HaveLen(1))
+			Expect(lokiConfig.Proxies[0].HTTPS).To(ContainElement(3100))
 		})
 	})
 })

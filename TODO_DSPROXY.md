@@ -3,31 +3,56 @@
 ## Goal
 Dynamically reconfigure the `dsproxy` sidecar based on the datasources defined in the `Grafana` CR.
 
-## Steps
+## Status: ✅ Steps 1-2 Completed
 
-### 1. Generate DSProxy Configuration
+### 1. ✅ Generate DSProxy Configuration
 **Location:** `internal/controller/datasource.go` -> `ReconcileDataSources`
 
-- After reconciling all datasources, iterate through the active list.
-- For each datasource (Prometheus, Loki, Tempo):
-  - Parse the URL to extract `Hostname` and `Port`.
-  - Determine the protocol (HTTP/HTTPS).
-- Construct a `dsproxy.yaml` structure:
-  ```yaml
-  proxies:
-    - domain: <hostname>
-      proxies:
-        http: [<port>]
-        https: [<port>] # if applicable
-  ```
-- Serialize this structure to YAML.
+**Implementation Details:**
+- Added `parseURLHostPort()` function to extract hostname, port, and scheme from datasource URLs
+- Added `buildDSProxyConfig()` function to build configuration from all enabled datasources
+- Configuration groups ports by domain and scheme (http/https)
+- Automatically handles default ports (80 for http, 443 for https)
 
-### 2. Manage ConfigMap
-**Location:** `internal/controller/datasource.go` -> `ReconcileDataSources`
+**Example Generated Configuration:**
+```yaml
+proxies:
+  - domain: prometheus.default.svc.cluster.local
+    proxies:
+      http: [9090]
+  - domain: loki.openshift-logging.svc.cluster.local
+    proxies:
+      https: [3100]
+  - domain: tempo.tempo-system.svc.cluster.local
+    proxies:
+      https: [3200]
+```
 
-- Define a `ConfigMap` name, e.g., `<instance-name>-dsproxy-config`.
-- Create or Update this `ConfigMap` in the instance's namespace with the generated YAML under a key (e.g., `dsproxy.yaml`).
-- Ensure the `ConfigMap` has appropriate labels and owner references.
+### 2. ✅ Manage ConfigMap
+**Location:** `internal/controller/datasource.go` -> `reconcileDSProxyConfig()`
+
+**Implementation Details:**
+- ConfigMap name: `<instance-name>-dsproxy-config`
+- Automatically created/updated during datasource reconciliation
+- Contains YAML configuration under key `dsproxy.yaml`
+- Has proper labels (`app.kubernetes.io/component: dsproxy`) and owner references
+- Automatically cleaned up when Grafana CR is deleted
+
+**Usage:**
+The ConfigMap is automatically created by the controller. To mount it in a pod:
+
+```yaml
+volumes:
+  - name: dsproxy-config
+    configMap:
+      name: <grafana-instance-name>-dsproxy-config
+
+containers:
+  - name: dsproxy
+    volumeMounts:
+      - name: dsproxy-config
+        mountPath: /etc/dsproxy/config
+```
 
 ### 3. Configure Grafana Deployment
 **Location:** `internal/controller/grafana.go` -> `buildGrafanaSpec`

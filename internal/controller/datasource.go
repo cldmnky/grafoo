@@ -112,6 +112,15 @@ func (r *GrafanaReconciler) ReconcileDataSources(ctx context.Context, instance *
 			}
 		}
 	}
+
+	// TODO: Generate dsproxy configuration based on the reconciled datasources.
+	// The dsproxy sidecar needs to know which upstream targets to intercept.
+	// 1. Iterate over all active datasources (Prometheus, Loki, Tempo).
+	// 2. Extract the hostname and port from each datasource URL.
+	// 3. Construct the dsproxy configuration (YAML) with the list of proxies.
+	// 4. Create or Update a ConfigMap (e.g., <instance-name>-dsproxy-config) with this configuration.
+	//    This ConfigMap should be mounted into the dsproxy sidecar container.
+
 	return nil
 }
 

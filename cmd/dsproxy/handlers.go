@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"sync"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/prometheus-community/prom-label-proxy/injectproxy"
@@ -157,4 +158,51 @@ func newPrometheusProxy(upstreamURL string, label string) (http.Handler, error) 
 	}
 
 	return routes, nil
+}
+
+type DynamicProxy struct {
+	label    string
+	scheme   string
+	handlers map[string]http.Handler
+	mu       sync.RWMutex
+}
+
+func NewDynamicProxy(scheme, label string) *DynamicProxy {
+	return &DynamicProxy{
+		label:    label,
+		scheme:   scheme,
+		handlers: make(map[string]http.Handler),
+	}
+}
+
+func (p *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	host := r.Host
+	if host == "" {
+		http.Error(w, "Missing Host header", http.StatusBadRequest)
+		return
+	}
+
+	p.mu.RLock()
+	handler, exists := p.handlers[host]
+	p.mu.RUnlock()
+
+	if !exists {
+		p.mu.Lock()
+		// Double check
+		if handler, exists = p.handlers[host]; !exists {
+			var err error
+			upstreamURL := fmt.Sprintf("%s://%s", p.scheme, host)
+			handler, err = newPrometheusProxy(upstreamURL, p.label)
+			if err != nil {
+				p.mu.Unlock()
+				log.Printf("Failed to create proxy for %s: %v", upstreamURL, err)
+				http.Error(w, "Failed to create proxy", http.StatusInternalServerError)
+				return
+			}
+			p.handlers[host] = handler
+		}
+		p.mu.Unlock()
+	}
+
+	handler.ServeHTTP(w, r)
 }

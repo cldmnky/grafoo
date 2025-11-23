@@ -174,7 +174,6 @@ var (
 	f_tlsKey         string
 	f_jwksURL        string
 	f_policyPath     string
-	f_upstreamURL    string
 	f_injectionLabel string
 	f_jwtAudience    string
 	f_caBundle       string
@@ -205,10 +204,6 @@ func init() {
 		getenvOrDefault("DSPROXY_POLICY_PATH", "/etc/dsproxy/policy"),
 		"Path to policy directory")
 
-	flag.StringVar(&f_upstreamURL, "upstream-url",
-		getenvOrDefault("DSPROXY_UPSTREAM_URL", "http://localhost:9090"),
-		"Upstream Prometheus URL")
-
 	flag.StringVar(&f_injectionLabel, "injection-label",
 		getenvOrDefault("DSPROXY_INJECTION_LABEL", "namespace"),
 		"Label name to inject for multi-tenancy (e.g., namespace, tenant)")
@@ -236,7 +231,7 @@ func getenvBoolOrDefault(envVar string, fallback bool) bool {
 	return fallback
 }
 
-func startServers(authzService *AuthzService, promProxy http.Handler) (httpServer, httpsServer *http.Server) {
+func startServers(authzService *AuthzService, httpProxy, httpsProxy http.Handler) (httpServer, httpsServer *http.Server) {
 	mux := http.NewServeMux()
 
 	// Middleware chain: auth -> authz -> prom-label-proxy
@@ -245,7 +240,7 @@ func startServers(authzService *AuthzService, promProxy http.Handler) (httpServe
 	// 3. prom-label-proxy: injects namespace labels based on authorized resources
 	handler := authMiddleware(
 		authzService.authzMiddleware("read")(
-			promProxy,
+			httpProxy,
 		),
 	)
 
@@ -268,7 +263,7 @@ func startServers(authzService *AuthzService, promProxy http.Handler) (httpServe
 		httpsMux := http.NewServeMux()
 		httpsHandler := authMiddleware(
 			authzService.authzMiddleware("read")(
-				promProxy,
+				httpsProxy,
 			),
 		)
 		httpsMux.Handle("/", httpsHandler)
@@ -358,14 +353,13 @@ func main() {
 		log.Fatalf("Failed to initialize JWKS: %v", err)
 	}
 
-	// Create Prometheus proxy with label injection
-	promProxy, err := newPrometheusProxy(f_upstreamURL, f_injectionLabel)
-	if err != nil {
-		log.Fatalf("Failed to create Prometheus proxy: %v", err)
-	}
-	log.Printf("Prometheus proxy created: upstream=%s, label=%s", f_upstreamURL, f_injectionLabel)
+	// Create Dynamic Proxies for HTTP and HTTPS
+	httpProxy := NewDynamicProxy("http", f_injectionLabel)
+	httpsProxy := NewDynamicProxy("https", f_injectionLabel)
 
-	httpServer, httpsServer := startServers(authzService, promProxy)
+	log.Printf("Dynamic proxies created with label=%s", f_injectionLabel)
+
+	httpServer, httpsServer := startServers(authzService, httpProxy, httpsProxy)
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)

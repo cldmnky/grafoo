@@ -142,7 +142,7 @@ var _ = Describe("startServers", func() {
 		mockProxy := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		})
-		httpSrv, httpsSrv := startServers(authService, mockProxy)
+		httpSrv, httpsSrv := startServers(authService, mockProxy, mockProxy)
 		Expect(httpSrv).ToNot(BeNil())
 		Expect(httpsSrv).To(BeNil())
 		Expect(httpSrv.Addr).To(ContainSubstring(fmt.Sprintf("%d", redirectPortHTTP)))
@@ -155,7 +155,7 @@ var _ = Describe("startServers", func() {
 		mockProxy := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		})
-		httpSrv, httpsSrv := startServers(authService, mockProxy)
+		httpSrv, httpsSrv := startServers(authService, mockProxy, mockProxy)
 		fmt.Fprintf(GinkgoWriter, "httpSrv: %+v, httpsSrv: %+v\n", httpSrv, httpsSrv)
 		Expect(httpSrv).ToNot(BeNil())
 		Expect(httpsSrv).ToNot(BeNil())
@@ -171,7 +171,7 @@ var _ = Describe("startServers", func() {
 		mockProxy := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		})
-		httpSrv, httpsSrv := startServers(authService, mockProxy)
+		httpSrv, httpsSrv := startServers(authService, mockProxy, mockProxy)
 		Expect(httpSrv).ToNot(BeNil())
 		// The nil pointer dereference warning (SA5011) is about calling Close() on a possibly nil pointer.
 		// The check `if httpSrv != nil { httpSrv.Close() }` is safe, but staticcheck warns that

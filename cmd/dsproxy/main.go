@@ -165,12 +165,14 @@ func watchConfig(path string, onChange func()) {
 
 // Flags
 var (
-	f_iptables   bool
-	f_configPath string
-	f_tlsCert    string
-	f_tlsKey     string
-	f_jwksURL    string
-	f_policyPath string
+	f_iptables       bool
+	f_configPath     string
+	f_tlsCert        string
+	f_tlsKey         string
+	f_jwksURL        string
+	f_policyPath     string
+	f_upstreamURL    string
+	f_injectionLabel string
 )
 
 func init() {
@@ -197,6 +199,14 @@ func init() {
 	flag.StringVar(&f_policyPath, "policy-path",
 		getenvOrDefault("DSPROXY_POLICY_PATH", "/etc/dsproxy/policy"),
 		"Path to policy directory")
+
+	flag.StringVar(&f_upstreamURL, "upstream-url",
+		getenvOrDefault("DSPROXY_UPSTREAM_URL", "http://localhost:9090"),
+		"Upstream Prometheus URL")
+
+	flag.StringVar(&f_injectionLabel, "injection-label",
+		getenvOrDefault("DSPROXY_INJECTION_LABEL", "namespace"),
+		"Label name to inject for multi-tenancy (e.g., namespace, tenant)")
 }
 
 func getenvOrDefault(envVar, fallback string) string {
@@ -213,9 +223,20 @@ func getenvBoolOrDefault(envVar string, fallback bool) bool {
 	return fallback
 }
 
-func startServers(authzService *AuthzService) (httpServer, httpsServer *http.Server) {
+func startServers(authzService *AuthzService, promProxy http.Handler) (httpServer, httpsServer *http.Server) {
 	mux := http.NewServeMux()
-	mux.Handle("/", authMiddleware(authzService.authzMiddleware("read")(proxyHandler())))
+
+	// Middleware chain: auth -> authz -> prom-label-proxy
+	// 1. authMiddleware: validates JWT and extracts sub/groups
+	// 2. authzMiddleware: checks policy.csv and populates allowed cluster/namespace pairs
+	// 3. prom-label-proxy: injects namespace labels based on authorized resources
+	handler := authMiddleware(
+		authzService.authzMiddleware("read")(
+			promProxy,
+		),
+	)
+
+	mux.Handle("/", handler)
 
 	httpServer = &http.Server{
 		Addr:    fmt.Sprintf("127.0.0.1:%d", redirectPortHTTP),
@@ -232,7 +253,12 @@ func startServers(authzService *AuthzService) (httpServer, httpsServer *http.Ser
 
 	if f_tlsCert != "" && f_tlsKey != "" {
 		httpsMux := http.NewServeMux()
-		httpsMux.Handle("/", authMiddleware(authzService.authzMiddleware("read")(proxyHandler())))
+		httpsHandler := authMiddleware(
+			authzService.authzMiddleware("read")(
+				promProxy,
+			),
+		)
+		httpsMux.Handle("/", httpsHandler)
 		httpsServer = &http.Server{
 			Addr:    fmt.Sprintf("127.0.0.1:%d", redirectPortHTTPS),
 			Handler: httpsMux,
@@ -312,7 +338,14 @@ func main() {
 		log.Fatalf("Failed to initialize JWKS: %v", err)
 	}
 
-	httpServer, httpsServer := startServers(authzService)
+	// Create Prometheus proxy with label injection
+	promProxy, err := newPrometheusProxy(f_upstreamURL, f_injectionLabel)
+	if err != nil {
+		log.Fatalf("Failed to create Prometheus proxy: %v", err)
+	}
+	log.Printf("Prometheus proxy created: upstream=%s, label=%s", f_upstreamURL, f_injectionLabel)
+
+	httpServer, httpsServer := startServers(authzService, promProxy)
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)

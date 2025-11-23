@@ -13,10 +13,6 @@ import (
 	"github.com/fsnotify/fsnotify"
 )
 
-const (
-	ContextKeyAllowedClusters = contextKey("allowed_clusters")
-)
-
 type AuthzService struct {
 	Enforcer    *casbin.Enforcer
 	policyFile  string
@@ -101,23 +97,62 @@ func (a *AuthzService) authzMiddleware(action string) func(http.Handler) http.Ha
 			groups, _ := ctx.Value(ContextKeyGroups).([]string)
 			datasourceID, _ := ctx.Value(ContextDataSourceID).(string)
 
+			// Get all policies and check which resources the user can access
+			allPolicies, err := a.Enforcer.GetPolicy()
+			if err != nil {
+				log.Printf("[authz] error getting policies: %v", err)
+				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
+				return
+			}
+
 			subjects := append(groups, email)
 			allowed := map[string]struct{}{}
-			for _, sub := range subjects {
-				policies, err := a.Enforcer.GetFilteredPolicy(0, sub, datasourceID, "", action)
-				log.Printf("[authz] policies for subject %s: %v", sub, policies)
-				if err != nil {
-					log.Printf("[authz] error getting filtered policy for subject %s: %v", sub, err)
-					http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-					return
+
+			// Check each policy to see if it applies to our subjects and datasource
+			for _, policy := range allPolicies {
+				if len(policy) < 4 {
+					continue
 				}
-				for _, policy := range policies {
-					resource := policy[2] // obj, like cluster1/namespaceX
-					allowed[resource] = struct{}{}
+
+				policySub := policy[0]
+				policyDom := policy[1]
+				policyObj := policy[2]
+				policyAct := policy[3]
+
+				// Check if action matches
+				if policyAct != action {
+					continue
+				}
+
+				// Check if datasource matches (handle wildcards)
+				datasourceMatches := policyDom == "*" || policyDom == datasourceID
+				if !datasourceMatches {
+					continue
+				}
+
+				// Check if subject matches (direct or via role)
+				subjectMatches := false
+				for _, sub := range subjects {
+					if policySub == sub {
+						subjectMatches = true
+						break
+					}
+					// Check role inheritance
+					if ok, _ := a.Enforcer.HasRoleForUser(sub, policySub); ok {
+						subjectMatches = true
+						break
+					}
+				}
+
+				if subjectMatches {
+					// This policy grants access to this resource
+					log.Printf("[authz] allowing resource %s for subject %s", policyObj, policySub)
+					allowed[policyObj] = struct{}{}
 				}
 			}
 
 			if len(allowed) == 0 {
+				log.Printf("[authz] no resources allowed for %s with datasource %s", email, datasourceID)
 				http.Error(w, "Forbidden", http.StatusForbidden)
 				return
 			}
@@ -131,6 +166,7 @@ func (a *AuthzService) authzMiddleware(action string) func(http.Handler) http.Ha
 				}
 			}
 
+			log.Printf("[authz] allowed cluster/namespace pairs: %v", allowedPairs)
 			ctx = context.WithValue(ctx, ContextKeyAllowedClusters, allowedPairs)
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})

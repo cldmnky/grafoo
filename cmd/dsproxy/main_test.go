@@ -12,6 +12,7 @@ import (
 	"log"
 	"math/big"
 	"net"
+	"net/http"
 	"os"
 	"testing"
 	"time"
@@ -138,7 +139,10 @@ var _ = Describe("startServers", func() {
 		f_tlsCert = ""
 		f_tlsKey = ""
 		authService := &AuthzService{}
-		httpSrv, httpsSrv := startServers(authService)
+		mockProxy := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+		httpSrv, httpsSrv := startServers(authService, mockProxy)
 		Expect(httpSrv).ToNot(BeNil())
 		Expect(httpsSrv).To(BeNil())
 		Expect(httpSrv.Addr).To(ContainSubstring(fmt.Sprintf("%d", redirectPortHTTP)))
@@ -148,7 +152,10 @@ var _ = Describe("startServers", func() {
 
 	It("should return both HTTP and HTTPS servers if TLS cert and key are set", func() {
 		authService := &AuthzService{}
-		httpSrv, httpsSrv := startServers(authService)
+		mockProxy := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+		httpSrv, httpsSrv := startServers(authService, mockProxy)
 		fmt.Fprintf(GinkgoWriter, "httpSrv: %+v, httpsSrv: %+v\n", httpSrv, httpsSrv)
 		Expect(httpSrv).ToNot(BeNil())
 		Expect(httpsSrv).ToNot(BeNil())
@@ -161,7 +168,10 @@ var _ = Describe("startServers", func() {
 
 	It("should use proxyHandler as handler for both servers", func() {
 		authService := &AuthzService{}
-		httpSrv, httpsSrv := startServers(authService)
+		mockProxy := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+		httpSrv, httpsSrv := startServers(authService, mockProxy)
 		Expect(httpSrv).ToNot(BeNil())
 		// The nil pointer dereference warning (SA5011) is about calling Close() on a possibly nil pointer.
 		// The check `if httpSrv != nil { httpSrv.Close() }` is safe, but staticcheck warns that

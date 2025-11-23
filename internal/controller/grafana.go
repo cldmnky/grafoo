@@ -2,15 +2,8 @@ package controller
 
 import (
 	"context"
-	"crypto/rand"
-	"crypto/rsa"
-	"crypto/x509"
-	"crypto/x509/pkix"
-	"encoding/pem"
 	"fmt"
-	"math/big"
 	"net/url"
-	"time"
 
 	grafanav1beta1 "github.com/grafana/grafana-operator/v5/api/v1beta1"
 	corev1 "k8s.io/api/core/v1"
@@ -70,9 +63,6 @@ func (r *GrafanaReconciler) ReconcileGrafana(ctx context.Context, instance *graf
 		if err := r.createDSProxyPermissions(ctx, instance, subjects); err != nil {
 			return err
 		}
-		if err := r.reconcileDSProxyCert(ctx, instance); err != nil {
-			return err
-		}
 	}
 
 	// Build GrafanaSpec
@@ -86,83 +76,7 @@ func (r *GrafanaReconciler) ReconcileGrafana(ctx context.Context, instance *graf
 		return err
 	}
 
-	// Create or update DSProxy TLS certificate secret
-	if instance.Spec.EnableDSProxy {
-		if err := r.reconcileDSProxyCert(ctx, instance); err != nil {
-			return err
-		}
-	}
-
 	return nil
-}
-
-// reconcileDSProxyCert ensures that the TLS certificate for dsproxy is created and up-to-date.
-// It generates a self-signed certificate and stores it in a Kubernetes Secret.
-//
-// Parameters:
-// - ctx: The context for the request.
-// - instance: The Grafana instance for which the dsproxy certificate is being reconciled.
-//
-// Returns:
-// - An error if there is an issue creating or updating the certificate secret.
-func (r *GrafanaReconciler) reconcileDSProxyCert(ctx context.Context, instance *grafoov1alpha1.Grafana) error {
-	secretName := r.generateNameForComponent(instance, "dsproxy-tls")
-	secret := &corev1.Secret{}
-	err := r.Get(ctx, client.ObjectKey{Name: secretName, Namespace: instance.Namespace}, secret)
-	if err == nil {
-		return nil
-	}
-
-	// Generate self-signed cert
-	priv, err := rsa.GenerateKey(rand.Reader, 2048)
-	if err != nil {
-		return err
-	}
-
-	notBefore := time.Now()
-	notAfter := notBefore.Add(365 * 24 * time.Hour)
-
-	serialNumberLimit := new(big.Int).Lsh(big.NewInt(1), 128)
-	serialNumber, err := rand.Int(rand.Reader, serialNumberLimit)
-	if err != nil {
-		return err
-	}
-
-	template := x509.Certificate{
-		SerialNumber: serialNumber,
-		Subject: pkix.Name{
-			Organization: []string{"Grafoo"},
-		},
-		NotBefore: notBefore,
-		NotAfter:  notAfter,
-
-		KeyUsage:              x509.KeyUsageKeyEncipherment | x509.KeyUsageDigitalSignature,
-		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
-		BasicConstraintsValid: true,
-	}
-
-	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
-	if err != nil {
-		return err
-	}
-
-	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
-	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(priv)})
-
-	secret = &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      secretName,
-			Namespace: instance.Namespace,
-			Labels:    r.generateLabelsForComponent(instance, "dsproxy-tls"),
-		},
-		Type: corev1.SecretTypeTLS,
-		Data: map[string][]byte{
-			"tls.crt": certPEM,
-			"tls.key": keyPEM,
-		},
-	}
-
-	return r.Create(ctx, secret)
 }
 
 // getDatabaseConfig retrieves the database configuration for a Grafana instance.
@@ -284,6 +198,13 @@ func (r *GrafanaReconciler) buildGrafanaSpec(ctx context.Context, instance *graf
 		Version: instance.Spec.Version,
 		Deployment: &grafanav1beta1.DeploymentV1{
 			Spec: deploymentSpec,
+		},
+		Service: &grafanav1beta1.ServiceV1{
+			ObjectMeta: grafanav1beta1.ObjectMeta{
+				Annotations: map[string]string{
+					"service.beta.openshift.io/serving-cert-secret-name": r.generateNameForComponent(instance, "dsproxy-tls"),
+				},
+			},
 		},
 		Route: &grafanav1beta1.RouteOpenshiftV1{
 			Spec: &grafanav1beta1.RouteOpenShiftV1Spec{

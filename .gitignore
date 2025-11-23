@@ -26,3 +26,5 @@ bin/*
 dist/
 
 .mcp-debug-tools/
+
+**/node_modules/

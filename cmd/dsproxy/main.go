@@ -139,7 +139,7 @@ func applyRules(ipt iptablesInterface, cfg *Config) {
 	}
 }
 
-func watchConfig(path string, onChange func()) {
+func watchConfig(ctx context.Context, path string, onChange func()) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Fatalf("Failed to watch config: %v", err)
@@ -152,6 +152,9 @@ func watchConfig(path string, onChange func()) {
 
 	for {
 		select {
+		case <-ctx.Done():
+			log.Println("Stopping config watcher")
+			return
 		case event := <-watcher.Events:
 			if event.Op&(fsnotify.Write|fsnotify.Create) != 0 {
 				log.Println("Config file changed — reloading...")
@@ -173,6 +176,8 @@ var (
 	f_policyPath     string
 	f_upstreamURL    string
 	f_injectionLabel string
+	f_jwtAudience    string
+	f_caBundle       string
 )
 
 func init() {
@@ -207,6 +212,14 @@ func init() {
 	flag.StringVar(&f_injectionLabel, "injection-label",
 		getenvOrDefault("DSPROXY_INJECTION_LABEL", "namespace"),
 		"Label name to inject for multi-tenancy (e.g., namespace, tenant)")
+
+	flag.StringVar(&f_jwtAudience, "jwt-audience",
+		getenvOrDefault("DSPROXY_JWT_AUDIENCE", "example-app"),
+		"Expected JWT audience claim")
+
+	flag.StringVar(&f_caBundle, "ca-bundle",
+		getenvOrDefault("DSPROXY_CA_BUNDLE", ""),
+		"Path to CA bundle file for verifying upstream and JWKS certificates")
 }
 
 func getenvOrDefault(envVar, fallback string) string {
@@ -292,7 +305,14 @@ func main() {
 	log.Println("Redirect port HTTP:", redirectPortHTTP)
 	log.Println("Redirect port HTTPS:", redirectPortHTTPS)
 	log.Println("Starting dsproxy...")
+
+	// Create a context that is canceled on signal
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
 	var ipt iptablesInterface
+	var err error
+
 	if f_iptables {
 		if os.Geteuid() != 0 {
 			log.Fatal("Run as root for iptables support")
@@ -304,7 +324,7 @@ func main() {
 		if _, err := os.Stat(f_configPath); os.IsNotExist(err) {
 			log.Fatalf("Config file does not exist: %s", f_configPath)
 		}
-		ipt, err := iptables.New()
+		ipt, err = iptables.New()
 		if err != nil {
 			log.Fatalf("Failed to initialize iptables: %v", err)
 		}
@@ -318,7 +338,7 @@ func main() {
 
 	if f_iptables {
 		// Watch for config changes
-		watchConfig(f_configPath, func() {
+		go watchConfig(ctx, f_configPath, func() {
 			newCfg, err := loadConfig()
 			if err != nil {
 				log.Printf("Reload failed: %v", err)
@@ -328,7 +348,7 @@ func main() {
 		})
 	}
 
-	authzService, err := NewAuthzService(f_policyPath)
+	authzService, err := NewAuthzService(ctx, f_policyPath)
 	if err != nil {
 		log.Fatalf("Failed to initialize authorization service: %v", err)
 	}
@@ -350,6 +370,8 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)
 	<-sigChan
+	log.Println("Received shutdown signal")
+	cancel() // Cancel context to stop watchers
 
 	shutdownCtx, shutdownRelease := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownRelease()

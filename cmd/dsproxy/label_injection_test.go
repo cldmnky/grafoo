@@ -72,7 +72,7 @@ m = (g(r.sub, p.sub) || r.sub == p.sub) &&
 	Expect(err).To(BeNil())
 
 	// Create authz service
-	authzService, err := NewAuthzService(tmpDir)
+	authzService, err := NewAuthzService(context.Background(), tmpDir)
 	Expect(err).To(BeNil())
 	Expect(authzService).ToNot(BeNil())
 
@@ -327,7 +327,7 @@ m = (g(r.sub, p.sub) || r.sub == p.sub) &&
     r.act == p.act`
 			os.WriteFile(modelFile, []byte(modelContent), 0644)
 
-			authzService, err := NewAuthzService(tmpDir)
+			authzService, err := NewAuthzService(context.Background(), tmpDir)
 			Expect(err).To(BeNil())
 
 			promProxy, err := newPrometheusProxy(upstreamServer.URL, "namespace")
@@ -405,7 +405,7 @@ m = (g(r.sub, p.sub) || r.sub == p.sub) &&
     r.act == p.act`
 	os.WriteFile(modelFile, []byte(modelContent), 0644)
 
-	authzService, err := NewAuthzService(tmpDir)
+	authzService, err := NewAuthzService(context.Background(), tmpDir)
 	Expect(err).To(BeNil())
 
 	promProxy, err := newPrometheusProxy(upstreamServer.URL, "namespace")
@@ -485,7 +485,7 @@ m = (g(r.sub, p.sub) || r.sub == p.sub) &&
     r.act == p.act`
 	os.WriteFile(modelFile, []byte(modelContent), 0644)
 
-	authzService, err := NewAuthzService(tmpDir)
+	authzService, err := NewAuthzService(context.Background(), tmpDir)
 	Expect(err).To(BeNil())
 
 	promProxy, err := newPrometheusProxy(upstreamServer.URL, "namespace")

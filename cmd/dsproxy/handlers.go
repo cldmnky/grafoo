@@ -39,7 +39,7 @@ func authMiddleware(next http.Handler) http.Handler {
 		}
 		// check aud
 		aud, ok := claims["aud"].(string)
-		if !ok || aud != "example-app" {
+		if !ok || aud != f_jwtAudience {
 			http.Error(w, "Invalid audience", http.StatusUnauthorized)
 			return
 		}

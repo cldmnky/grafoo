@@ -19,7 +19,7 @@ type AuthzService struct {
 	policyModel string
 }
 
-func NewAuthzService(policyPath string) (*AuthzService, error) {
+func NewAuthzService(ctx context.Context, policyPath string) (*AuthzService, error) {
 	policyFile := filepath.Join(policyPath, "policy.csv")
 	policyModel := filepath.Join(policyPath, "model.conf")
 	adapter := fileadapter.NewAdapter(policyFile)
@@ -32,7 +32,7 @@ func NewAuthzService(policyPath string) (*AuthzService, error) {
 	}
 
 	authz := &AuthzService{Enforcer: enforcer, policyFile: policyFile, policyModel: policyModel}
-	go authz.watchPolicyAndModel()
+	go authz.watchPolicyAndModel(ctx)
 	return authz, nil
 }
 
@@ -50,7 +50,7 @@ func (a *AuthzService) Authorize(subject string, groups []string, domain, cluste
 	return false
 }
 
-func (a *AuthzService) watchPolicyAndModel() {
+func (a *AuthzService) watchPolicyAndModel(ctx context.Context) {
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Printf("[authz] failed to initialize watcher: %v", err)
@@ -67,6 +67,9 @@ func (a *AuthzService) watchPolicyAndModel() {
 
 	for {
 		select {
+		case <-ctx.Done():
+			log.Println("[authz] stopping policy watcher")
+			return
 		case event, ok := <-watcher.Events:
 			if !ok {
 				return

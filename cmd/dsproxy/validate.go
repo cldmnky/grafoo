@@ -2,9 +2,12 @@ package main
 
 import (
 	"crypto/tls"
+	"crypto/x509"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
+	"os"
 	"strings"
 	"time"
 
@@ -14,11 +17,36 @@ import (
 
 var jwks *keyfunc.JWKS
 
+func getTLSConfig() (*tls.Config, error) {
+	if f_caBundle == "" {
+		return nil, nil // Use system certs
+	}
+
+	caCert, err := os.ReadFile(f_caBundle)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read CA bundle: %w", err)
+	}
+
+	caCertPool := x509.NewCertPool()
+	if !caCertPool.AppendCertsFromPEM(caCert) {
+		return nil, errors.New("failed to append CA bundle to cert pool")
+	}
+
+	return &tls.Config{
+		RootCAs: caCertPool,
+	}, nil
+}
+
 func initJWKS() error {
-	// Fetch from discovery URL with TLS verification disabled
+	tlsConfig, err := getTLSConfig()
+	if err != nil {
+		return err
+	}
+
+	// Fetch from discovery URL
 	client := &http.Client{
 		Transport: &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+			TLSClientConfig: tlsConfig,
 		},
 	}
 	res, err := client.Get(f_jwksURL)
@@ -34,12 +62,12 @@ func initJWKS() error {
 		return err
 	}
 
-	// Use keyfunc to get the key set, also with TLS verification disabled
+	// Use keyfunc to get the key set
 	jwks, err = keyfunc.Get(config.JWKSURI, keyfunc.Options{
 		RefreshInterval: 1 * time.Hour,
 		Client: &http.Client{
 			Transport: &http.Transport{
-				TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+				TLSClientConfig: tlsConfig,
 			},
 		},
 	})

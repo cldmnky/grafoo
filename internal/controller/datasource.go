@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
-	"strings"
 
 	grafanav1beta1 "github.com/grafana/grafana-operator/v5/api/v1beta1"
 	authenticationv1 "k8s.io/api/authentication/v1"
@@ -386,23 +385,17 @@ func (r *GrafanaReconciler) buildDSProxyConfig(ctx context.Context, instance *gr
 			continue
 		}
 
-		// Normalize scheme to http/https
-		normalizedScheme := "http"
-		if scheme == "https" {
-			normalizedScheme = "https"
-		}
-
 		// Initialize maps if needed
 		if domainMap[hostname] == nil {
 			domainMap[hostname] = make(map[string]map[int]bool)
 		}
-		if domainMap[hostname][normalizedScheme] == nil {
-			domainMap[hostname][normalizedScheme] = make(map[int]bool)
+		if domainMap[hostname][scheme] == nil {
+			domainMap[hostname][scheme] = make(map[int]bool)
 		}
 
 		// Add port to the map
-		domainMap[hostname][normalizedScheme][port] = true
-		logger.Info("Added datasource to dsproxy config", "datasource", ds.Name, "hostname", hostname, "port", port, "scheme", normalizedScheme)
+		domainMap[hostname][scheme][port] = true
+		logger.Info("Added datasource to dsproxy config", "datasource", ds.Name, "hostname", hostname, "port", port, "scheme", scheme)
 	}
 
 	// Build the DSProxyConfig from the map
@@ -469,7 +462,7 @@ func (r *GrafanaReconciler) reconcileDSProxyConfig(ctx context.Context, instance
 	op, err := CreateOrUpdateWithRetries(ctx, r.Client, configMap, func() error {
 		configMap.ObjectMeta.Labels = r.generateLabelsForComponent(instance, "dsproxy")
 		configMap.Data = map[string]string{
-			"dsproxy.yaml": strings.TrimSpace(string(configYAML)),
+			"dsproxy.yaml": string(configYAML),
 		}
 		return ctrl.SetControllerReference(instance, configMap, r.Scheme)
 	})

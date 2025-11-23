@@ -52,6 +52,8 @@ OPERATOR_SDK_VERSION ?= v1.34.2
 
 # Image URL to use all building/pushing image targets
 IMG ?= $(IMAGE_TAG_BASE):latest
+# DSPROXY_IMG defines the image:tag used for the dsproxy.
+DSPROXY_IMG ?= $(IMAGE_TAG_BASE)-dsproxy:latest
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
 ENVTEST_K8S_VERSION = 1.30.0
 
@@ -163,6 +165,10 @@ release: semver
 build: manifests generate fmt vet ## Build manager binary.
 	go build -o bin/manager cmd/grafoo/main.go
 
+.PHONY: build-dsproxy
+build-dsproxy: manifests generate fmt vet ## Build dsproxy binary.
+	go build -o bin/dsproxy cmd/dsproxy/main.go
+
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./cmd/grafoo/main.go
@@ -176,9 +182,22 @@ docker-build:  manifests generate fmt vet ko ## Build docker image with the mana
 		--bare=true \
 		./cmd/grafoo
 
+.PHONY: docker-build-dsproxy
+docker-build-dsproxy: manifests generate fmt vet ko ## Build docker image with the dsproxy.
+	KO_DOCKER_REPO=$(IMAGE_TAG_BASE)-dsproxy \
+	KO_DEFAULTBASEIMAGE=registry.access.redhat.com/ubi9/ubi:9.4 \
+	$(KO) build --platform linux/amd64,linux/arm64 \
+		--preserve-import-paths=false \
+		--bare=true \
+		./cmd/dsproxy
+
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
 	$(CONTAINER_TOOL) push ${IMG}
+
+.PHONY: docker-push-dsproxy
+docker-push-dsproxy: ## Push docker image with the dsproxy.
+	$(CONTAINER_TOOL) push ${DSPROXY_IMG}
 
 ##@ Deployment
 

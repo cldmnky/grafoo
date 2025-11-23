@@ -21,34 +21,20 @@ import (
 	. "github.com/onsi/gomega"
 )
 
-// --- Fake iptables for testing ---
+// --- Fake nftables for testing ---
 
-type fakeIPTables struct {
-	existsRules  map[string]bool
-	appendCalled []string
-	appendErr    error
-	existsErr    error
+type fakeNftables struct {
+	rules []string
 }
 
-func newFakeIPTables() *fakeIPTables {
-	return &fakeIPTables{
-		existsRules:  make(map[string]bool),
-		appendCalled: []string{},
-	}
+func (f *fakeNftables) AddRedirectRule(ip string, port, targetPort int) error {
+	f.rules = append(f.rules, fmt.Sprintf("%s:%d->%d", ip, port, targetPort))
+	return nil
 }
 
-func (f *fakeIPTables) Exists(table, chain string, rulespec ...string) (bool, error) {
-	key := fmt.Sprintf("%s|%s|%v", table, chain, rulespec)
-	if f.existsErr != nil {
-		return false, f.existsErr
-	}
-	return f.existsRules[key], nil
-}
-
-func (f *fakeIPTables) AppendUnique(table, chain string, rulespec ...string) error {
-	key := fmt.Sprintf("%s|%s|%v", table, chain, rulespec)
-	f.appendCalled = append(f.appendCalled, key)
-	return f.appendErr
+func (f *fakeNftables) FlushRules() error {
+	f.rules = []string{}
+	return nil
 }
 
 // Generate a temporary TLS cert and key for testing
@@ -186,54 +172,6 @@ var _ = Describe("startServers", func() {
 	})
 })
 
-var _ = Describe("iptables rule management", func() {
-	var fake *fakeIPTables
-
-	BeforeEach(func() {
-		fake = newFakeIPTables()
-	})
-
-	It("should detect existing iptables rule", func() {
-		ip := "1.2.3.4"
-		port := 80
-		key := fmt.Sprintf("nat|OUTPUT|[%s %s %s %s %s %s %s %s %s %s]",
-			"-p", "tcp", "-d", ip, "--dport", fmt.Sprintf("%d", port), "-j", "REDIRECT", "--to-port", fmt.Sprintf("%d", redirectPortHTTP))
-		fake.existsRules[key] = true
-		Expect(iptablesRuleExists(fake, ip, port)).To(BeTrue())
-	})
-
-	It("should add iptables rule if not exists", func() {
-		ip := "1.2.3.4"
-		port := 80
-		Expect(addIptablesRule(fake, ip, port)).To(Succeed())
-		Expect(fake.appendCalled).To(HaveLen(1))
-	})
-
-	It("should not add rule if already exists", func() {
-		ip := "1.2.3.4"
-		port := 80
-		key := fmt.Sprintf("nat|OUTPUT|[%s %s %s %s %s %s %s %s %s %s]",
-			"-p", "tcp", "-d", ip, "--dport", fmt.Sprintf("%d", port), "-j", "REDIRECT", "--to-port", fmt.Sprintf("%d", redirectPortHTTP))
-		fake.existsRules[key] = true
-		Expect(addIptablesRule(fake, ip, port)).To(Succeed())
-		Expect(fake.appendCalled).To(HaveLen(0))
-	})
-
-	It("should handle error from Exists", func() {
-		ip := "1.2.3.4"
-		port := 80
-		fake.existsErr = errors.New("fail")
-		Expect(iptablesRuleExists(fake, ip, port)).To(BeFalse())
-	})
-
-	It("should return error if AppendUnique fails", func() {
-		ip := "1.2.3.4"
-		port := 80
-		fake.appendErr = errors.New("append fail")
-		Expect(addIptablesRule(fake, ip, port)).ToNot(Succeed())
-	})
-})
-
 var _ = Describe("resolveDomainIP", func() {
 	It("should resolve a valid domain", func() {
 		ip, err := resolveDomainIP("localhost")
@@ -249,12 +187,12 @@ var _ = Describe("resolveDomainIP", func() {
 
 var _ = Describe("applyRules", func() {
 	var (
-		fake                *fakeIPTables
+		fake                *fakeNftables
 		origResolveDomainIP func(string) (string, error)
 	)
 
 	BeforeEach(func() {
-		fake = newFakeIPTables()
+		fake = &fakeNftables{}
 		origResolveDomainIP = resolveDomainIP
 	})
 
@@ -271,13 +209,13 @@ var _ = Describe("applyRules", func() {
 				{
 					Domain: "example.com",
 					Proxies: []Proxies{
-						{http: []int{80, 8080}, https: []int{443}},
+						{HTTP: []int{80, 8080}, HTTPS: []int{443}},
 					},
 				},
 			},
 		}
 		applyRules(fake, cfg)
-		Expect(fake.appendCalled).To(HaveLen(3))
+		Expect(fake.rules).To(HaveLen(3))
 	})
 
 	It("should skip rule if DNS fails", func() {
@@ -289,13 +227,13 @@ var _ = Describe("applyRules", func() {
 				{
 					Domain: "bad.com",
 					Proxies: []Proxies{
-						{http: []int{80}, https: []int{443}},
+						{HTTP: []int{80}, HTTPS: []int{443}},
 					},
 				},
 			},
 		}
 		applyRules(fake, cfg)
-		Expect(fake.appendCalled).To(BeEmpty())
+		Expect(fake.rules).To(BeEmpty())
 	})
 
 	It("should continue applying rules for multiple proxies even if one fails DNS", func() {
@@ -310,19 +248,19 @@ var _ = Describe("applyRules", func() {
 				{
 					Domain: "fail.com",
 					Proxies: []Proxies{
-						{http: []int{80}},
+						{HTTP: []int{80}},
 					},
 				},
 				{
 					Domain: "ok.com",
 					Proxies: []Proxies{
-						{http: []int{8080}, https: []int{8443}},
+						{HTTP: []int{8080}, HTTPS: []int{8443}},
 					},
 				},
 			},
 		}
 		applyRules(fake, cfg)
-		Expect(fake.appendCalled).To(HaveLen(2))
+		Expect(fake.rules).To(HaveLen(2))
 	})
 
 	It("should handle empty proxies list", func() {
@@ -338,6 +276,6 @@ var _ = Describe("applyRules", func() {
 			},
 		}
 		applyRules(fake, cfg)
-		Expect(fake.appendCalled).To(BeEmpty())
+		Expect(fake.rules).To(BeEmpty())
 	})
 })

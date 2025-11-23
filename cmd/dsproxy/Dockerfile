@@ -27,7 +27,7 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o ds
 
 # Final image
 FROM alpine:latest
-RUN apk add --no-cache iptables
+RUN apk add --no-cache nftables
 
 WORKDIR /
 COPY --from=builder /workspace/dsproxy .

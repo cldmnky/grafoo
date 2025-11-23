@@ -98,15 +98,15 @@ rules:
   verbs:
   - get
 - apiGroups:
-  - authorization.k8s.io
+  - authentication.k8s.io
   resources:
-  - subjectaccessreviews
+  - tokenreviews
   verbs:
   - create
 - apiGroups:
   - authorization.k8s.io
   resources:
-  - tokenreviews
+  - subjectaccessreviews
   verbs:
   - create
 - apiGroups:

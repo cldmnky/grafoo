@@ -8,6 +8,7 @@
 
 # Cluster admins can access all datasources and namespaces
 p, system:cluster-admin, *, */*, read
+p, system:cluster-admins, *, */*, read
 
 # Team-specific access
 p, team-monitoring, prometheus-prod, prod-cluster/monitoring, read

@@ -6,20 +6,30 @@ import (
 
 	"github.com/casbin/casbin/v2/model"
 	"github.com/casbin/casbin/v2/persist"
+	fileadapter "github.com/casbin/casbin/v2/persist/file-adapter"
 	grafoov1alpha1 "github.com/cldmnky/grafoo/api/v1alpha1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type K8sAdapter struct {
-	client client.Client
+	client   client.Client
+	filePath string
 }
 
-func NewK8sAdapter(client client.Client) *K8sAdapter {
-	return &K8sAdapter{client: client}
+func NewK8sAdapter(client client.Client, filePath string) *K8sAdapter {
+	return &K8sAdapter{client: client, filePath: filePath}
 }
 
 // LoadPolicy loads all policy rules from the storage.
 func (a *K8sAdapter) LoadPolicy(model model.Model) error {
+	// Load from file first if specified
+	if a.filePath != "" {
+		fa := fileadapter.NewAdapter(a.filePath)
+		if err := fa.LoadPolicy(model); err != nil {
+			return fmt.Errorf("failed to load policy from file %s: %w", a.filePath, err)
+		}
+	}
+
 	ctx := context.Background()
 	var rules grafoov1alpha1.GrafanaDataSourceRuleList
 	if err := a.client.List(ctx, &rules); err != nil {

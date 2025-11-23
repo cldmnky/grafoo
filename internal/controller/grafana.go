@@ -157,6 +157,8 @@ func (r *GrafanaReconciler) buildGrafanaSpec(ctx context.Context, instance *graf
 							"--iptables=true",
 							"--jwks-url=" + r.generateRouteUriForComponent(ctx, instance, "dex") + "/.well-known/openid-configuration",
 							"--policy-path=/etc/dsproxy/policy",
+							"--token-review=true",
+							"--jwt-audience=grafana",
 						},
 						VolumeMounts: []corev1.VolumeMount{
 							{
@@ -257,10 +259,16 @@ func (r *GrafanaReconciler) createOrUpdateGrafanaResource(ctx context.Context, i
 
 func (r *GrafanaReconciler) createAuthReviewerResources(ctx context.Context, instance *grafoov1alpha1.Grafana, subjects []rbacv1.Subject) error {
 	roleName := r.generateNameForComponent(instance, "auth-reviewer")
+	ctrl.Log.Info("Creating auth reviewer resources", "roleName", roleName)
 	rules := []rbacv1.PolicyRule{
 		{
 			APIGroups: []string{"authorization.k8s.io"},
-			Resources: []string{"subjectaccessreviews", "tokenreviews"},
+			Resources: []string{"subjectaccessreviews"},
+			Verbs:     []string{"create"},
+		},
+		{
+			APIGroups: []string{"authentication.k8s.io"},
+			Resources: []string{"tokenreviews"},
 			Verbs:     []string{"create"},
 		},
 	}

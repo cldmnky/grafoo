@@ -39,8 +39,23 @@ func authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		// check aud
-		aud, ok := claims["aud"].(string)
-		if !ok || aud != f_jwtAudience {
+		auds, err := claims.GetAudience()
+		if err != nil {
+			log.Printf("Failed to get audience from claims: %v", err)
+			http.Error(w, "Invalid audience claim", http.StatusUnauthorized)
+			return
+		}
+
+		validAudience := false
+		for _, a := range auds {
+			if a == f_jwtAudience {
+				validAudience = true
+				break
+			}
+		}
+
+		if !validAudience {
+			log.Printf("Invalid audience. Expected %s, got %v", f_jwtAudience, auds)
 			http.Error(w, "Invalid audience", http.StatusUnauthorized)
 			return
 		}
@@ -57,7 +72,13 @@ func authMiddleware(next http.Handler) http.Handler {
 
 		log.Printf("Authenticated user: %s (sub: %s), groups: %v", email, sub, groups)
 
-		ctx := context.WithValue(r.Context(), ContextKeyEmail, sub) // Use sub as primary identity
+		// Use email as primary identity if available, otherwise sub
+		identity := sub
+		if email != "" {
+			identity = email
+		}
+
+		ctx := context.WithValue(r.Context(), ContextKeyEmail, identity)
 		ctx = context.WithValue(ctx, ContextKeyGroups, groups)
 
 		// Get ds from the header X-Datasource-Uid
@@ -71,9 +92,6 @@ func authMiddleware(next http.Handler) http.Handler {
 		if datasourceType != "" {
 			ctx = context.WithValue(ctx, ContextDataSourceType, datasourceType)
 		}
-
-		// Remove authorization header to prevent it from being forwarded
-		r.Header.Del("Authorization")
 
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
-
 	"time"
 
 	"github.com/casbin/casbin/v2"
@@ -30,7 +29,7 @@ func NewAuthzService(ctx context.Context, policyPath string, k8sClient client.Cl
 
 	var adapter persist.Adapter
 	if k8sClient != nil {
-		adapter = NewK8sAdapter(k8sClient)
+		adapter = NewK8sAdapter(k8sClient, policyFile)
 	} else {
 		adapter = fileadapter.NewAdapter(policyFile)
 	}
@@ -136,6 +135,7 @@ func (a *AuthzService) authzMiddleware(action string) func(http.Handler) http.Ha
 				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 				return
 			}
+			log.Printf("[authz-debug] loaded %d policies", len(allPolicies))
 
 			subjects := append(groups, email)
 			allowed := map[string]struct{}{}
@@ -165,6 +165,7 @@ func (a *AuthzService) authzMiddleware(action string) func(http.Handler) http.Ha
 				// Check if subject matches (direct or via role)
 				subjectMatches := false
 				for _, sub := range subjects {
+					log.Printf("[authz-debug] checking sub '%s' against policySub '%s'", sub, policySub)
 					if policySub == sub {
 						subjectMatches = true
 						break

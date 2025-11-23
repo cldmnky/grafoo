@@ -319,13 +319,19 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	// Requeue 5 minutes before token expiration to allow proactive refresh
 	// (needsRefreshedToken will trigger refresh at 15 minutes before expiry)
-	requeueAfter := time.Until(grafooInstance.Status.TokenExpirationTime.Time) - time.Minute*5
-	if requeueAfter < 0 {
-		// If token already expired or very close to expiry, requeue immediately
+	var requeueAfter time.Duration
+	if grafooInstance.Status.TokenExpirationTime == nil {
+		// If TokenExpirationTime is nil, requeue immediately and log a warning
+		logger.Info("TokenExpirationTime is nil, requeuing immediately")
 		requeueAfter = 0
+	} else {
+		requeueAfter = time.Until(grafooInstance.Status.TokenExpirationTime.Time) - time.Minute*5
+		if requeueAfter < 0 {
+			// If token already expired or very close to expiry, requeue immediately
+			requeueAfter = 0
+		}
 	}
 	logger.Info("Requeuing reconciliation", "after", requeueAfter)
-
 	return ctrl.Result{Requeue: true, RequeueAfter: requeueAfter}, nil
 }
 

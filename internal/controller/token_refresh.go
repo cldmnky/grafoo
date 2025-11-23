@@ -10,23 +10,31 @@ import (
 
 func needsRefreshedToken(instance *grafoov1alpha1.Grafana) (bool, error) {
 	// Check if the token needs to be refreshed
-	if instance.Status.TokenExpirationTime != nil {
-		if instance.Status.TokenExpirationTime.Before(&metav1.Time{
-			Time: time.Now(),
-		}) {
-			return true, nil
-		}
-		// If the token is not expired, check if it needs to be refreshed
-		//lint:ignore S1024 metav1.Time is not comparable
-		if instance.Status.TokenExpirationTime.Sub(time.Now()) < time.Minute*15 {
-			return true, nil
-		}
-	}
-	if instance.Status.TokenGenerationTime == nil {
+
+	// If either time is missing, we need to generate a token
+	if instance.Status.TokenExpirationTime == nil || instance.Status.TokenGenerationTime == nil {
 		return true, nil
 	}
-	if time.Duration(time.Duration(instance.Status.TokenExpirationTime.Time.Sub(instance.Status.TokenGenerationTime.Time)).Seconds()) < time.Duration(instance.Spec.TokenDuration.Duration.Seconds()) {
+
+	// If the token is already expired
+	if instance.Status.TokenExpirationTime.Before(&metav1.Time{
+		Time: time.Now(),
+	}) {
 		return true, nil
 	}
+
+	// If the token is close to expiry (less than 15 minutes remaining), refresh proactively
+	//lint:ignore S1024 metav1.Time is not comparable
+	if instance.Status.TokenExpirationTime.Sub(time.Now()) < time.Minute*15 {
+		return true, nil
+	}
+
+	// If the actual token lifetime is shorter than the configured duration,
+	// the token may have been truncated and should be refreshed
+	actualTokenLifetime := instance.Status.TokenExpirationTime.Time.Sub(instance.Status.TokenGenerationTime.Time)
+	if actualTokenLifetime < instance.Spec.TokenDuration.Duration {
+		return true, nil
+	}
+
 	return false, nil
 }

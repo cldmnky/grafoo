@@ -17,6 +17,11 @@ import (
 	"github.com/fsnotify/fsnotify"
 	flag "github.com/spf13/pflag"
 	"gopkg.in/yaml.v3"
+	"k8s.io/client-go/kubernetes/scheme"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	grafoov1alpha1 "github.com/cldmnky/grafoo/api/v1alpha1"
 )
 
 type Config struct {
@@ -231,24 +236,47 @@ func getenvBoolOrDefault(envVar string, fallback bool) bool {
 	return fallback
 }
 
-func startServers(authzService *AuthzService, httpProxy, httpsProxy http.Handler) (httpServer, httpsServer *http.Server) {
-	mux := http.NewServeMux()
+func startServers(authzService *AuthzService, httpProxy, httpsProxy http.Handler, k8sClient client.Client) (httpServer, httpsServer *http.Server) {
+	// API Handler
+	apiMux := http.NewServeMux()
+	if k8sClient != nil {
+		apiHandler := NewAPIHandler(k8sClient)
+		apiHandler.RegisterRoutes(apiMux)
+	}
+	apiHandler := authMiddleware(apiMux)
 
+	// UI Handler
+	ui := uiHandler()
+
+	// Proxy Handler
 	// Middleware chain: auth -> authz -> prom-label-proxy
-	// 1. authMiddleware: validates JWT and extracts sub/groups
-	// 2. authzMiddleware: checks policy.csv and populates allowed cluster/namespace pairs
-	// 3. prom-label-proxy: injects namespace labels based on authorized resources
-	handler := authMiddleware(
+	proxyHandler := authMiddleware(
 		authzService.authzMiddleware("read")(
 			httpProxy,
 		),
 	)
 
-	mux.Handle("/", handler)
+	// Main Handler with dispatch logic
+	mainHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Management API
+		if strings.HasPrefix(r.URL.Path, "/api/v1/rules") {
+			apiHandler.ServeHTTP(w, r)
+			return
+		}
+
+		// UI
+		if strings.HasPrefix(r.URL.Path, "/ui/") || r.URL.Path == "/ui" {
+			http.StripPrefix("/ui", ui).ServeHTTP(w, r)
+			return
+		}
+
+		// Default: Proxy
+		proxyHandler.ServeHTTP(w, r)
+	})
 
 	httpServer = &http.Server{
 		Addr:    fmt.Sprintf("127.0.0.1:%d", redirectPortHTTP),
-		Handler: mux,
+		Handler: mainHandler,
 	}
 	log.Println("Starting HTTP server on port", redirectPortHTTP)
 
@@ -260,16 +288,27 @@ func startServers(authzService *AuthzService, httpProxy, httpsProxy http.Handler
 	}()
 
 	if f_tlsCert != "" && f_tlsKey != "" {
-		httpsMux := http.NewServeMux()
-		httpsHandler := authMiddleware(
+		httpsProxyHandler := authMiddleware(
 			authzService.authzMiddleware("read")(
 				httpsProxy,
 			),
 		)
-		httpsMux.Handle("/", httpsHandler)
+
+		httpsMainHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/api/v1/rules") {
+				apiHandler.ServeHTTP(w, r)
+				return
+			}
+			if strings.HasPrefix(r.URL.Path, "/ui/") || r.URL.Path == "/ui" {
+				http.StripPrefix("/ui", ui).ServeHTTP(w, r)
+				return
+			}
+			httpsProxyHandler.ServeHTTP(w, r)
+		})
+
 		httpsServer = &http.Server{
 			Addr:    fmt.Sprintf("127.0.0.1:%d", redirectPortHTTPS),
-			Handler: httpsMux,
+			Handler: httpsMainHandler,
 		}
 		log.Println("Starting HTTPS server on port", redirectPortHTTPS)
 		go func() {
@@ -343,7 +382,23 @@ func main() {
 		})
 	}
 
-	authzService, err := NewAuthzService(ctx, f_policyPath)
+	// Initialize Kubernetes client
+	var k8sClient client.Client
+	k8sConfig, err := ctrl.GetConfig()
+	if err != nil {
+		log.Printf("Failed to get k8s config (running in file-only mode): %v", err)
+	} else {
+		if err := grafoov1alpha1.AddToScheme(scheme.Scheme); err != nil {
+			log.Fatalf("Failed to add grafoo types to scheme: %v", err)
+		}
+		k8sClient, err = client.New(k8sConfig, client.Options{Scheme: scheme.Scheme})
+		if err != nil {
+			log.Fatalf("Failed to create k8s client: %v", err)
+		}
+		log.Println("Kubernetes client initialized")
+	}
+
+	authzService, err := NewAuthzService(ctx, f_policyPath, k8sClient)
 	if err != nil {
 		log.Fatalf("Failed to initialize authorization service: %v", err)
 	}
@@ -359,7 +414,7 @@ func main() {
 
 	log.Printf("Dynamic proxies created with label=%s", f_injectionLabel)
 
-	httpServer, httpsServer := startServers(authzService, httpProxy, httpsProxy)
+	httpServer, httpsServer := startServers(authzService, httpProxy, httpsProxy, k8sClient)
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)

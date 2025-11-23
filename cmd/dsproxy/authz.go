@@ -8,21 +8,33 @@ import (
 	"path/filepath"
 	"strings"
 
+	"time"
+
 	"github.com/casbin/casbin/v2"
+	"github.com/casbin/casbin/v2/persist"
 	fileadapter "github.com/casbin/casbin/v2/persist/file-adapter"
 	"github.com/fsnotify/fsnotify"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type AuthzService struct {
 	Enforcer    *casbin.Enforcer
 	policyFile  string
 	policyModel string
+	k8sClient   client.Client
 }
 
-func NewAuthzService(ctx context.Context, policyPath string) (*AuthzService, error) {
+func NewAuthzService(ctx context.Context, policyPath string, k8sClient client.Client) (*AuthzService, error) {
 	policyFile := filepath.Join(policyPath, "policy.csv")
 	policyModel := filepath.Join(policyPath, "model.conf")
-	adapter := fileadapter.NewAdapter(policyFile)
+
+	var adapter persist.Adapter
+	if k8sClient != nil {
+		adapter = NewK8sAdapter(k8sClient)
+	} else {
+		adapter = fileadapter.NewAdapter(policyFile)
+	}
+
 	enforcer, err := casbin.NewEnforcer(policyModel, adapter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create enforcer: %w", err)
@@ -31,7 +43,7 @@ func NewAuthzService(ctx context.Context, policyPath string) (*AuthzService, err
 		return nil, fmt.Errorf("failed to load policy: %w", err)
 	}
 
-	authz := &AuthzService{Enforcer: enforcer, policyFile: policyFile, policyModel: policyModel}
+	authz := &AuthzService{Enforcer: enforcer, policyFile: policyFile, policyModel: policyModel, k8sClient: k8sClient}
 	go authz.watchPolicyAndModel(ctx)
 	return authz, nil
 }
@@ -51,6 +63,23 @@ func (a *AuthzService) Authorize(subject string, groups []string, domain, cluste
 }
 
 func (a *AuthzService) watchPolicyAndModel(ctx context.Context) {
+	if a.k8sClient != nil {
+		// Polling for K8s
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				log.Println("[authz] stopping k8s policy watcher")
+				return
+			case <-ticker.C:
+				if err := a.Enforcer.LoadPolicy(); err != nil {
+					log.Printf("[authz] failed to reload policy from k8s: %v", err)
+				}
+			}
+		}
+	}
+
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Printf("[authz] failed to initialize watcher: %v", err)

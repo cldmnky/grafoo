@@ -36,6 +36,7 @@ func (r *Grafana) SetupWebhookWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewWebhookManagedBy(mgr).
 		For(r).
 		WithDefaulter(&GrafooCustomDefaulter{}).
+		WithValidator(r).
 		Complete()
 }
 
@@ -75,7 +76,7 @@ func (r *GrafooCustomDefaulter) Default(ctx context.Context, obj runtime.Object)
 	if len(grafoo.Spec.DataSources) == 0 {
 		grafoo.Spec.DataSources = DataSources
 	}
-	if grafoo.Spec.EnableMCOO == true {
+	if grafoo.Spec.EnableMCOO {
 		grafoo.Spec.DataSources = append(grafoo.Spec.DataSources, DataSourceMcoo...)
 	}
 	// check if datasources are updated in the spec
@@ -85,10 +86,10 @@ func (r *GrafooCustomDefaulter) Default(ctx context.Context, obj runtime.Object)
 // TODO(user): change verbs to "verbs=create;update;delete" if you want to enable deletion validation.
 //+kubebuilder:webhook:path=/validate-grafoo-cloudmonkey-org-v1alpha1-grafana,mutating=false,failurePolicy=fail,sideEffects=None,groups=grafoo.cloudmonkey.org,resources=grafanas,verbs=create;update,versions=v1alpha1,name=vgrafana.kb.io,admissionReviewVersions=v1
 
-var _ webhook.Validator = &Grafana{}
+var _ webhook.CustomValidator = &Grafana{}
 
-// ValidateCreate implements webhook.Validator so a webhook will be registered for the type
-func (r *Grafana) ValidateCreate() (admission.Warnings, error) {
+// ValidateCreate implements webhook.CustomValidator so a webhook will be registered for the type
+func (r *Grafana) ValidateCreate(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
 	grafanalog.Info("validate create", "name", r.Name)
 	return nil, r.validateGrafana()
 }
@@ -161,21 +162,14 @@ func (r *Grafana) validateGrafanaDatasources() *field.Error {
 	return nil
 }
 
-// ValidateUpdate implements webhook.Validator so a webhook will be registered for the type
-func (r *Grafana) ValidateUpdate(old runtime.Object) (admission.Warnings, error) {
+// ValidateUpdate implements webhook.CustomValidator so a webhook will be registered for the type
+func (r *Grafana) ValidateUpdate(ctx context.Context, oldObj, newObj runtime.Object) (admission.Warnings, error) {
 	grafanalog.Info("validate update", "name", r.Name)
-
-	// validate datasources type
-	for _, ds := range r.Spec.DataSources {
-		if ds.Type != "prometheus-incluster" && ds.Type != "loki-incluster" && ds.Type != "tempo-incluster" {
-			return admission.Warnings{"invalid datasource type"}, nil
-		}
-	}
-	return nil, nil
+	return nil, r.validateGrafana()
 }
 
-// ValidateDelete implements webhook.Validator so a webhook will be registered for the type
-func (r *Grafana) ValidateDelete() (admission.Warnings, error) {
+// ValidateDelete implements webhook.CustomValidator so a webhook will be registered for the type
+func (r *Grafana) ValidateDelete(ctx context.Context, obj runtime.Object) (admission.Warnings, error) {
 	grafanalog.Info("validate delete", "name", r.Name)
 
 	// TODO(user): fill in your validation logic upon object deletion.

@@ -1,0 +1,31 @@
+# DSProxy Authorization Policy
+# Format: p, subject, datasource, cluster/namespace, action
+# 
+# subject: User identifier from JWT 'sub' claim or group name
+# datasource: Datasource ID from X-Datasource-Uid header (* = any datasource)
+# cluster/namespace: Resource in format "cluster/namespace" (supports wildcards)
+# action: Operation type (read, write, etc.)
+
+# Cluster admins can access all datasources and namespaces
+p, system:cluster-admin, *, */*, read
+
+# Team-specific access
+p, team-monitoring, prometheus-prod, prod-cluster/monitoring, read
+p, team-monitoring, prometheus-prod, prod-cluster/alerting, read
+p, team-backend, prometheus-prod, prod-cluster/backend-*, read
+p, team-frontend, prometheus-prod, prod-cluster/frontend-*, read
+
+# Individual user access examples
+p, alice@example.com, datasource1, cluster1/namespace3, read
+p, bob@example.com, prometheus-dev, */dev-*, read
+
+# Wildcard examples
+p, developers, *, */dev-*, read
+p, qa-team, *, */qa-*, read
+p, sre-team, *, */*, read
+
+# Role inheritance (g, user, role)
+# Users inherit permissions from their assigned roles
+g, alice@example.com, team-backend
+g, bob@example.com, developers
+g, admin@example.com, system:cluster-admin

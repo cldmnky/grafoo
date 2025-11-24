@@ -26,3 +26,6 @@ bin/*
 dist/
 
 .mcp-debug-tools/
+
+cmd/dsproxy/ui/node_modules/
+cmd/dsproxy/ui/dist/

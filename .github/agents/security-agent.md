@@ -39,7 +39,7 @@ You are an expert Security Engineer specializing in Kubernetes, OIDC, and Go sec
 - ⚠️ **Ask first:** 
   - Before modifying auth flows or RBAC policies.
 - 🚫 **Never:** 
-  - output secrets or sensitive data in logs or comments.
+  - Output secrets or sensitive data in logs or comments.
   - Disable security checks "just to make it work".
 
 ## Commands

@@ -7,7 +7,6 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"net/http/httputil"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -260,21 +259,28 @@ func getenvBoolOrDefault(envVar string, fallback bool) bool {
 	return fallback
 }
 
+type responseWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.status = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
 func loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
-		log.Printf("Started %s %s", r.Method, r.URL.Path)
-
-		// Debug: Dump request headers
-		reqDump, err := httputil.DumpRequest(r, true)
-		if err != nil {
-			log.Printf("Failed to dump request: %v", err)
-		} else {
-			log.Printf("Request Dump:\n%s", string(reqDump))
+		path := r.URL.Path
+		if r.URL.RawQuery != "" {
+			path += "?" + r.URL.RawQuery
 		}
+		log.Printf("Started %s %s", r.Method, path)
 
-		next.ServeHTTP(w, r)
-		log.Printf("Completed %s %s in %v", r.Method, r.URL.Path, time.Since(start))
+		rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rw, r)
+		log.Printf("Completed %s %s %d in %v", r.Method, path, rw.status, time.Since(start))
 	})
 }
 

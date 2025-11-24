@@ -25,22 +25,26 @@ var (
 )
 
 func getTLSConfig() (*tls.Config, error) {
-	if f_caBundle == "" {
-		return nil, nil // Use system certs
+	var caCertPool *x509.CertPool
+	if f_caBundle != "" {
+		caCert, err := os.ReadFile(f_caBundle)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read CA bundle: %w", err)
+		}
+
+		caCertPool = x509.NewCertPool()
+		if !caCertPool.AppendCertsFromPEM(caCert) {
+			return nil, errors.New("failed to append CA bundle to cert pool")
+		}
 	}
 
-	caCert, err := os.ReadFile(f_caBundle)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read CA bundle: %w", err)
-	}
-
-	caCertPool := x509.NewCertPool()
-	if !caCertPool.AppendCertsFromPEM(caCert) {
-		return nil, errors.New("failed to append CA bundle to cert pool")
+	if caCertPool == nil && !f_insecureSkipVerify {
+		return nil, nil // Use system certs and default verification
 	}
 
 	return &tls.Config{
-		RootCAs: caCertPool,
+		RootCAs:            caCertPool,
+		InsecureSkipVerify: f_insecureSkipVerify,
 	}, nil
 }
 

@@ -187,16 +187,17 @@ func watchConfig(ctx context.Context, path string, onChange func()) {
 
 // Flags
 var (
-	f_iptables       bool
-	f_configPath     string
-	f_tlsCert        string
-	f_tlsKey         string
-	f_jwksURL        string
-	f_policyPath     string
-	f_injectionLabel string
-	f_jwtAudience    string
-	f_caBundle       string
-	f_tokenReview    bool
+	f_iptables           bool
+	f_configPath         string
+	f_tlsCert            string
+	f_tlsKey             string
+	f_jwksURL            string
+	f_policyPath         string
+	f_injectionLabel     string
+	f_jwtAudience        string
+	f_caBundle           string
+	f_tokenReview        bool
+	f_insecureSkipVerify bool
 )
 
 func init() {
@@ -211,6 +212,10 @@ func init() {
 	flag.BoolVar(&f_tokenReview, "token-review",
 		getenvBoolOrDefault("DSPROXY_TOKEN_REVIEW", false),
 		"Enable Kubernetes TokenReview for validation")
+
+	flag.BoolVar(&f_insecureSkipVerify, "insecure-skip-verify",
+		getenvBoolOrDefault("DSPROXY_INSECURE_SKIP_VERIFY", false),
+		"Skip TLS certificate verification for upstream connections")
 
 	flag.StringVar(&f_tlsCert, "tls-cert",
 		getenvOrDefault("DSPROXY_TLS_CERT", "/etc/dsproxy/tls/tls.crt"),
@@ -440,6 +445,18 @@ func main() {
 	// Initialize Auth (JWKS or TokenReview)
 	if err := initAuth(); err != nil {
 		log.Fatalf("Failed to initialize auth: %v", err)
+	}
+
+	// Configure global HTTP transport for proxies
+	tlsConfig, err := getTLSConfig()
+	if err != nil {
+		log.Fatalf("Failed to get TLS config: %v", err)
+	}
+	if tlsConfig != nil {
+		if t, ok := http.DefaultTransport.(*http.Transport); ok {
+			t.TLSClientConfig = tlsConfig
+			log.Println("Configured global HTTP transport with custom TLS settings")
+		}
 	}
 
 	// Create Dynamic Proxies for HTTP and HTTPS

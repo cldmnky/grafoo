@@ -73,7 +73,7 @@ func TestAuthMiddleware_SuccessAndFailure(t *testing.T) {
 		io.WriteString(w, "OK")
 		// Get the context - we now use 'sub' as the primary identity
 		email := r.Context().Value(ContextKeyEmail)
-		Expect(email).To(Equal("1234567890")) // This is the 'sub' claim now
+		Expect(email).To(Equal("kube:admin")) // This is the 'email' claim now (prioritized over sub)
 		groups := r.Context().Value(ContextKeyGroups)
 		Expect(groups).ToNot(BeNil())
 		Expect(groups).To(BeAssignableToTypeOf([]string{}))

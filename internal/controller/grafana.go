@@ -159,6 +159,7 @@ func (r *GrafanaReconciler) buildGrafanaSpec(ctx context.Context, instance *graf
 							"--policy-path=/etc/dsproxy/policy",
 							"--token-review=true",
 							"--jwt-audience=grafana",
+							"--insecure-skip-verify=true",
 						},
 						VolumeMounts: []corev1.VolumeMount{
 							{

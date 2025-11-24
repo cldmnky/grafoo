@@ -6,6 +6,8 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
+	"sync"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/prometheus-community/prom-label-proxy/injectproxy"
@@ -38,8 +40,23 @@ func authMiddleware(next http.Handler) http.Handler {
 			return
 		}
 		// check aud
-		aud, ok := claims["aud"].(string)
-		if !ok || aud != f_jwtAudience {
+		auds, err := claims.GetAudience()
+		if err != nil {
+			log.Printf("Failed to get audience from claims: %v", err)
+			http.Error(w, "Invalid audience claim", http.StatusUnauthorized)
+			return
+		}
+
+		validAudience := false
+		for _, a := range auds {
+			if a == f_jwtAudience {
+				validAudience = true
+				break
+			}
+		}
+
+		if !validAudience {
+			log.Printf("Invalid audience. Expected %s, got %v", f_jwtAudience, auds)
 			http.Error(w, "Invalid audience", http.StatusUnauthorized)
 			return
 		}
@@ -56,7 +73,13 @@ func authMiddleware(next http.Handler) http.Handler {
 
 		log.Printf("Authenticated user: %s (sub: %s), groups: %v", email, sub, groups)
 
-		ctx := context.WithValue(r.Context(), ContextKeyEmail, sub) // Use sub as primary identity
+		// Use email as primary identity if available, otherwise sub
+		identity := sub
+		if email != "" {
+			identity = email
+		}
+
+		ctx := context.WithValue(r.Context(), ContextKeyEmail, identity)
 		ctx = context.WithValue(ctx, ContextKeyGroups, groups)
 
 		// Get ds from the header X-Datasource-Uid
@@ -70,9 +93,6 @@ func authMiddleware(next http.Handler) http.Handler {
 		if datasourceType != "" {
 			ctx = context.WithValue(ctx, ContextDataSourceType, datasourceType)
 		}
-
-		// Remove authorization header to prevent it from being forwarded
-		r.Header.Del("Authorization")
 
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
@@ -111,12 +131,24 @@ func (e *contextLabelExtractor) ExtractLabel(next http.HandlerFunc) http.Handler
 		}
 
 		// Extract namespaces from the allowed pairs
-		// For now, we'll use the first allowed namespace
-		// TODO: Support multiple namespaces via regex in prom-label-proxy
 		namespaces := make([]string, 0, len(allowedPairs))
+		hasWildcard := false
 		for _, pair := range allowedPairs {
 			namespace := pair[1] // pair is [cluster, namespace]
+			if namespace == "*" {
+				hasWildcard = true
+				break
+			}
 			namespaces = append(namespaces, namespace)
+		}
+
+		// If wildcard access is granted, use a regex that matches all namespaces
+		// Use .+ to match any non-empty namespace (not .* to avoid matching metrics without namespace label)
+		if hasWildcard {
+			log.Printf("[label-injection] Wildcard namespace access detected, using regex matcher")
+			ctx := injectproxy.WithLabelValues(r.Context(), []string{".+"})
+			next(w, r.WithContext(ctx))
+			return
 		}
 
 		if len(namespaces) == 0 {
@@ -127,11 +159,15 @@ func (e *contextLabelExtractor) ExtractLabel(next http.HandlerFunc) http.Handler
 		log.Printf("[label-injection] Injecting namespaces: %v", namespaces)
 
 		// For single namespace, use it directly
-		// For multiple namespaces, we need to handle OR logic (future enhancement)
-		labelValue := namespaces[0]
-		if len(namespaces) > 1 {
-			// TODO: prom-label-proxy supports regex - could inject namespace=~"ns1|ns2|ns3"
-			log.Printf("[label-injection] Warning: Multiple namespaces authorized, using first: %s", labelValue)
+		// For multiple namespaces, create a regex pattern
+		var labelValue string
+		if len(namespaces) == 1 {
+			labelValue = namespaces[0]
+		} else {
+			// Multiple namespaces: use regex with alternation
+			// prom-label-proxy will create namespace=~"ns1|ns2|ns3"
+			labelValue = strings.Join(namespaces, "|")
+			log.Printf("[label-injection] Multiple namespaces authorized, using regex: %s", labelValue)
 		}
 
 		// Store label in context using prom-label-proxy's WithLabelValues
@@ -151,10 +187,62 @@ func newPrometheusProxy(upstreamURL string, label string) (http.Handler, error) 
 		label: label,
 	}
 
-	routes, err := injectproxy.NewRoutes(upstream, label, extractor)
+	routes, err := injectproxy.NewRoutes(
+		upstream,
+		label,
+		extractor,
+		injectproxy.WithEnabledLabelsAPI(),
+		injectproxy.WithRegexMatch(), // Enable regex matching for namespace patterns
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create proxy routes: %w", err)
 	}
 
 	return routes, nil
+}
+
+type DynamicProxy struct {
+	label    string
+	scheme   string
+	handlers map[string]http.Handler
+	mu       sync.RWMutex
+}
+
+func NewDynamicProxy(scheme, label string) *DynamicProxy {
+	return &DynamicProxy{
+		label:    label,
+		scheme:   scheme,
+		handlers: make(map[string]http.Handler),
+	}
+}
+
+func (p *DynamicProxy) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	host := r.Host
+	if host == "" {
+		http.Error(w, "Missing Host header", http.StatusBadRequest)
+		return
+	}
+
+	p.mu.RLock()
+	handler, exists := p.handlers[host]
+	p.mu.RUnlock()
+
+	if !exists {
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		// Double check: verify handler doesn't exist after acquiring write lock
+		if handler, exists = p.handlers[host]; !exists {
+			var err error
+			upstreamURL := fmt.Sprintf("%s://%s", p.scheme, host)
+			handler, err = newPrometheusProxy(upstreamURL, p.label)
+			if err != nil {
+				log.Printf("Failed to create proxy for %s: %v", upstreamURL, err)
+				http.Error(w, "Failed to create proxy", http.StatusInternalServerError)
+				return
+			}
+			p.handlers[host] = handler
+		}
+	}
+
+	handler.ServeHTTP(w, r)
 }

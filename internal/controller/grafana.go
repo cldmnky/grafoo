@@ -13,6 +13,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	grafoov1alpha1 "github.com/cldmnky/grafoo/api/v1alpha1"
+	"github.com/cldmnky/grafoo/internal/config"
 )
 
 func (r *GrafanaReconciler) ReconcileGrafana(ctx context.Context, instance *grafoov1alpha1.Grafana) error {
@@ -25,17 +26,6 @@ func (r *GrafanaReconciler) ReconcileGrafana(ctx context.Context, instance *graf
 	// Get database configuration
 	databaseConfig, err := r.getDatabaseConfig(ctx, instance)
 	if err != nil {
-		return err
-	}
-
-	// Build GrafanaSpec
-	grafanaSpec, err := r.buildGrafanaSpec(ctx, instance, clientSecret, databaseConfig)
-	if err != nil {
-		return err
-	}
-
-	// Create or update Grafana resource
-	if err := r.createOrUpdateGrafanaResource(ctx, instance, grafanaSpec); err != nil {
 		return err
 	}
 
@@ -62,6 +52,27 @@ func (r *GrafanaReconciler) ReconcileGrafana(ctx context.Context, instance *graf
 	}
 
 	if err := r.createLoggingBindings(ctx, instance, subjects); err != nil {
+		return err
+	}
+
+	// Create SCC binding for dsproxy
+	if instance.Spec.EnableDSProxy {
+		if err := r.createSCCBinding(ctx, instance, subjects); err != nil {
+			return err
+		}
+		if err := r.createDSProxyPermissions(ctx, instance, subjects); err != nil {
+			return err
+		}
+	}
+
+	// Build GrafanaSpec
+	grafanaSpec, err := r.buildGrafanaSpec(ctx, instance, clientSecret, databaseConfig)
+	if err != nil {
+		return err
+	}
+
+	// Create or update Grafana resource
+	if err := r.createOrUpdateGrafanaResource(ctx, instance, grafanaSpec); err != nil {
 		return err
 	}
 
@@ -124,11 +135,78 @@ func (r *GrafanaReconciler) buildGrafanaSpec(ctx context.Context, instance *graf
 	}
 	grafanaRouteDomain := u.Hostname()
 
+	deploymentSpec := grafanav1beta1.DeploymentV1Spec{
+		Replicas: instance.Spec.Replicas,
+	}
+
+	if instance.Spec.EnableDSProxy {
+		deploymentSpec.Template = &grafanav1beta1.DeploymentV1PodTemplateSpec{
+			Spec: &grafanav1beta1.DeploymentV1PodSpec{
+				ServiceAccountName: r.generateNameForComponent(instance, "sa"),
+				Containers: []corev1.Container{
+					{
+						Name:  "dsproxy",
+						Image: config.DSProxyImage,
+						SecurityContext: &corev1.SecurityContext{
+							Capabilities: &corev1.Capabilities{
+								Add: []corev1.Capability{"NET_ADMIN"},
+							},
+						},
+						Args: []string{
+							"--config=/etc/dsproxy/config/dsproxy.yaml",
+							"--iptables=true",
+							"--jwks-url=" + r.generateRouteUriForComponent(ctx, instance, "dex") + "/.well-known/openid-configuration",
+							"--policy-path=/etc/dsproxy/policy",
+							"--token-review=true",
+							"--jwt-audience=grafana", // This is needed dex: issues tokens with audience 'grafana'
+							"--insecure-skip-verify=true",
+						},
+						VolumeMounts: []corev1.VolumeMount{
+							{
+								Name:      "dsproxy-config",
+								MountPath: "/etc/dsproxy/config",
+							},
+							{
+								Name:      "dsproxy-tls",
+								MountPath: "/etc/dsproxy/tls",
+							},
+						},
+					},
+				},
+				Volumes: []corev1.Volume{
+					{
+						Name: "dsproxy-config",
+						VolumeSource: corev1.VolumeSource{
+							ConfigMap: &corev1.ConfigMapVolumeSource{
+								LocalObjectReference: corev1.LocalObjectReference{
+									Name: r.generateNameForComponent(instance, "dsproxy-config"),
+								},
+							},
+						},
+					},
+					{
+						Name: "dsproxy-tls",
+						VolumeSource: corev1.VolumeSource{
+							Secret: &corev1.SecretVolumeSource{
+								SecretName: r.generateNameForComponent(instance, "dsproxy-tls"),
+							},
+						},
+					},
+				},
+			},
+		}
+	}
+
 	return grafanav1beta1.GrafanaSpec{
 		Version: instance.Spec.Version,
 		Deployment: &grafanav1beta1.DeploymentV1{
-			Spec: grafanav1beta1.DeploymentV1Spec{
-				Replicas: instance.Spec.Replicas,
+			Spec: deploymentSpec,
+		},
+		Service: &grafanav1beta1.ServiceV1{
+			ObjectMeta: grafanav1beta1.ObjectMeta{
+				Annotations: map[string]string{
+					"service.beta.openshift.io/serving-cert-secret-name": r.generateNameForComponent(instance, "dsproxy-tls"),
+				},
 			},
 		},
 		Route: &grafanav1beta1.RouteOpenshiftV1{
@@ -182,10 +260,16 @@ func (r *GrafanaReconciler) createOrUpdateGrafanaResource(ctx context.Context, i
 
 func (r *GrafanaReconciler) createAuthReviewerResources(ctx context.Context, instance *grafoov1alpha1.Grafana, subjects []rbacv1.Subject) error {
 	roleName := r.generateNameForComponent(instance, "auth-reviewer")
+	ctrl.Log.Info("Creating auth reviewer resources", "roleName", roleName)
 	rules := []rbacv1.PolicyRule{
 		{
 			APIGroups: []string{"authorization.k8s.io"},
-			Resources: []string{"subjectaccessreviews", "tokenreviews"},
+			Resources: []string{"subjectaccessreviews"},
+			Verbs:     []string{"create"},
+		},
+		{
+			APIGroups: []string{"authentication.k8s.io"},
+			Resources: []string{"tokenreviews"},
 			Verbs:     []string{"create"},
 		},
 	}
@@ -272,4 +356,27 @@ func (r *GrafanaReconciler) createClusterRoleBindingIfRoleExists(ctx context.Con
 		return r.createClusterRoleBinding(ctx, instance, bindingName, roleName, subjects)
 	}
 	return nil
+}
+
+func (r *GrafanaReconciler) createSCCBinding(ctx context.Context, instance *grafoov1alpha1.Grafana, subjects []rbacv1.Subject) error {
+	// Bind to the privileged SCC to allow NET_ADMIN for dsproxy
+	// We use the system:openshift:scc:privileged ClusterRole which grants use of the privileged SCC
+	// ClusterRoleBinding name must be unique across the cluster, so we include the namespace
+	bindingName := fmt.Sprintf("%s-%s-%s", instance.Name, instance.Namespace, "scc-privileged")
+	return r.createClusterRoleBinding(ctx, instance, bindingName, "system:openshift:scc:privileged", subjects)
+}
+
+func (r *GrafanaReconciler) createDSProxyPermissions(ctx context.Context, instance *grafoov1alpha1.Grafana, subjects []rbacv1.Subject) error {
+	roleName := r.generateNameForComponent(instance, "dsproxy-role")
+	rules := []rbacv1.PolicyRule{
+		{
+			APIGroups: []string{"grafoo.cloudmonkey.org"},
+			Resources: []string{"grafanadatasourcerules"},
+			Verbs:     []string{"get", "list", "watch"},
+		},
+	}
+	if err := r.createClusterRole(ctx, instance, roleName, rules); err != nil {
+		return err
+	}
+	return r.createClusterRoleBinding(ctx, instance, roleName, roleName, subjects)
 }

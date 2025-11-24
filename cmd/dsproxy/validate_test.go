@@ -42,8 +42,8 @@ func TestInitJWKSAndVerifyBearerToken(t *testing.T) {
 	f_jwksURL = discoverySrv.URL
 	defer func() { f_jwksURL = origJWKSURL }()
 
-	// Call initJWKS and expect no error
-	err = initJWKS()
+	// Call initAuth and expect no error
+	err = initAuth()
 	Expect(err).To(BeNil())
 	Expect(jwks).ToNot(BeNil())
 

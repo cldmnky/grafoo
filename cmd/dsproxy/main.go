@@ -8,57 +8,104 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/coreos/go-iptables/iptables"
 	"github.com/fsnotify/fsnotify"
 	flag "github.com/spf13/pflag"
 	"gopkg.in/yaml.v3"
+	"k8s.io/client-go/kubernetes/scheme"
+	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	grafoov1alpha1 "github.com/cldmnky/grafoo/api/v1alpha1"
 )
 
 type Config struct {
-	Proxies []ProxyRule `yaml:"proxies"`
+	Proxies []ProxyRule `yaml:"Proxies"`
 }
 
 // ProxyRule defines a rule for redirecting traffic
 // to a specific domain and ports.
 // Example config.yaml:
 //
-// proxies:
-//   - domain: example.com
-//     proxies:
-//     http: [80, 8080]
-//     https: [443, 8443]
-//   - domain: another.com
-//     proxies:
-//     http: [80]
-//     https: [443]
+// Proxies:
+//   - Domain: example.com
+//     Proxies:
+//     HTTP: [80, 8080]
+//     HTTPS: [443, 8443]
+//   - Domain: another.com
+//     Proxies:
+//     HTTP: [80]
+//     HTTPS: [443]
 //
 // Save this as /etc/dsproxy/config.yaml or specify with --config flag.
 type ProxyRule struct {
-	Domain  string    `yaml:"domain"`
-	Proxies []Proxies `yaml:"proxies"`
+	Domain  string    `yaml:"Domain"`
+	Proxies []Proxies `yaml:"Proxies"`
 }
 
 type Proxies struct {
-	http  []int `yaml:"http"`
-	https []int `yaml:"https"`
+	HTTP  []int `yaml:"HTTP"`
+	HTTPS []int `yaml:"HTTPS"`
 }
 
 const (
 	redirectPortHTTP  = 5533
 	redirectPortHTTPS = 5534
-	ipTableTarget     = "nat"
-	ipTableChain      = "OUTPUT"
 )
 
-// Interface for iptables operations
-type iptablesInterface interface {
-	Exists(table, chain string, rulespec ...string) (bool, error)
-	AppendUnique(table, chain string, rulespec ...string) error
+// Interface for nftables operations
+type nftablesInterface interface {
+	AddRedirectRule(ip string, port, targetPort int) error
+	FlushRules() error
+}
+
+type nftablesRunner struct{}
+
+func (r *nftablesRunner) FlushRules() error {
+	cmd := exec.Command("nft", "flush", "ruleset")
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("failed to flush ruleset: %s: %w", string(out), err)
+	}
+
+	// Initialize basic table and chain
+	initCmds := []string{
+		"add table ip nat",
+		"add chain ip nat OUTPUT { type nat hook output priority 0; policy accept; }",
+	}
+
+	for _, c := range initCmds {
+		args := strings.Split(c, " ")
+		cmd := exec.Command("nft", args...)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("failed to run nft command '%s': %s: %w", c, string(out), err)
+		}
+	}
+	return nil
+}
+
+func (r *nftablesRunner) AddRedirectRule(ip string, port, targetPort int) error {
+	// nft add rule ip nat OUTPUT meta skuid != 0 ip daddr 1.2.3.4 tcp dport 80 counter dnat to 127.0.0.1:5533
+	args := []string{
+		"add", "rule", "ip", "nat", "OUTPUT",
+		"meta", "skuid", "!=", "0",
+		"ip", "daddr", ip,
+		"tcp", "dport", fmt.Sprintf("%d", port),
+		"counter",
+		"dnat", "to", fmt.Sprintf("127.0.0.1:%d", targetPort),
+	}
+
+	cmd := exec.Command("nft", args...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("failed to add rule: %s: %w", string(out), err)
+	}
+	log.Printf("Added nftables rule for %s:%d -> 127.0.0.1:%d", ip, port, targetPort)
+	return nil
 }
 
 var resolveDomainIP = func(domain string) (string, error) {
@@ -70,39 +117,6 @@ var resolveDomainIP = func(domain string) (string, error) {
 		return "", fmt.Errorf("no IPs found for %s", domain)
 	}
 	return ips[0], nil
-}
-
-func iptablesRuleExists(ipt iptablesInterface, ip string, port int) bool {
-	exists, err := ipt.Exists(
-		ipTableTarget,
-		ipTableChain,
-		"-p", "tcp",
-		"-d", ip,
-		"--dport", fmt.Sprintf("%d", port),
-		"-j", "REDIRECT",
-		"--to-port", fmt.Sprintf("%d", redirectPortHTTP),
-	)
-	if err != nil {
-		log.Printf("Error checking for iptables rule %s:%d: %v", ip, port, err)
-		return false // Assume rule doesn't exist if there's an error checking
-	}
-	return exists
-}
-
-func addIptablesRule(ipt iptablesInterface, ip string, port int) error {
-	if iptablesRuleExists(ipt, ip, port) {
-		log.Printf("iptables rule already exists for %s:%d", ip, port)
-		return nil
-	}
-	ruleSpec := []string{
-		"-p", "tcp",
-		"-d", ip,
-		"--dport", fmt.Sprintf("%d", port),
-		"-j", "REDIRECT",
-		"--to-port", fmt.Sprintf("%d", redirectPortHTTP),
-	}
-	log.Printf("Adding iptables rule: %s", strings.Join(ruleSpec, " "))
-	return ipt.AppendUnique(ipTableTarget, ipTableChain, ruleSpec...)
 }
 
 func loadConfig() (*Config, error) {
@@ -117,7 +131,12 @@ func loadConfig() (*Config, error) {
 	return &cfg, nil
 }
 
-func applyRules(ipt iptablesInterface, cfg *Config) {
+func applyRules(nft nftablesInterface, cfg *Config) {
+	// Flush existing rules first to avoid duplicates
+	if err := nft.FlushRules(); err != nil {
+		log.Printf("Failed to flush nftables rules: %v", err)
+	}
+
 	for _, rule := range cfg.Proxies {
 		ip, err := resolveDomainIP(rule.Domain)
 		if err != nil {
@@ -125,14 +144,14 @@ func applyRules(ipt iptablesInterface, cfg *Config) {
 			continue
 		}
 		for _, proxies := range rule.Proxies {
-			for _, p := range proxies.http {
-				if err := addIptablesRule(ipt, ip, p); err != nil {
-					log.Printf("Failed to add iptables rule for %s:%d: %v", ip, p, err)
+			for _, p := range proxies.HTTP {
+				if err := nft.AddRedirectRule(ip, p, redirectPortHTTP); err != nil {
+					log.Printf("Failed to add nftables rule for %s:%d: %v", ip, p, err)
 				}
 			}
-			for _, p := range proxies.https {
-				if err := addIptablesRule(ipt, ip, p); err != nil {
-					log.Printf("Failed to add iptables rule for %s:%d: %v", ip, p, err)
+			for _, p := range proxies.HTTPS {
+				if err := nft.AddRedirectRule(ip, p, redirectPortHTTPS); err != nil {
+					log.Printf("Failed to add nftables rule for %s:%d: %v", ip, p, err)
 				}
 			}
 		}
@@ -168,16 +187,17 @@ func watchConfig(ctx context.Context, path string, onChange func()) {
 
 // Flags
 var (
-	f_iptables       bool
-	f_configPath     string
-	f_tlsCert        string
-	f_tlsKey         string
-	f_jwksURL        string
-	f_policyPath     string
-	f_upstreamURL    string
-	f_injectionLabel string
-	f_jwtAudience    string
-	f_caBundle       string
+	f_iptables           bool
+	f_configPath         string
+	f_tlsCert            string
+	f_tlsKey             string
+	f_jwksURL            string
+	f_policyPath         string
+	f_injectionLabel     string
+	f_jwtAudience        string
+	f_caBundle           string
+	f_tokenReview        bool
+	f_insecureSkipVerify bool
 )
 
 func init() {
@@ -188,6 +208,14 @@ func init() {
 	flag.BoolVar(&f_iptables, "iptables",
 		getenvBoolOrDefault("DSPROXY_IPTABLES", true),
 		"Enable iptables support")
+
+	flag.BoolVar(&f_tokenReview, "token-review",
+		getenvBoolOrDefault("DSPROXY_TOKEN_REVIEW", false),
+		"Enable Kubernetes TokenReview for validation")
+
+	flag.BoolVar(&f_insecureSkipVerify, "insecure-skip-verify",
+		getenvBoolOrDefault("DSPROXY_INSECURE_SKIP_VERIFY", false),
+		"Skip TLS certificate verification for upstream connections")
 
 	flag.StringVar(&f_tlsCert, "tls-cert",
 		getenvOrDefault("DSPROXY_TLS_CERT", "/etc/dsproxy/tls/tls.crt"),
@@ -204,10 +232,6 @@ func init() {
 	flag.StringVar(&f_policyPath, "policy-path",
 		getenvOrDefault("DSPROXY_POLICY_PATH", "/etc/dsproxy/policy"),
 		"Path to policy directory")
-
-	flag.StringVar(&f_upstreamURL, "upstream-url",
-		getenvOrDefault("DSPROXY_UPSTREAM_URL", "http://localhost:9090"),
-		"Upstream Prometheus URL")
 
 	flag.StringVar(&f_injectionLabel, "injection-label",
 		getenvOrDefault("DSPROXY_INJECTION_LABEL", "namespace"),
@@ -236,24 +260,72 @@ func getenvBoolOrDefault(envVar string, fallback bool) bool {
 	return fallback
 }
 
-func startServers(authzService *AuthzService, promProxy http.Handler) (httpServer, httpsServer *http.Server) {
-	mux := http.NewServeMux()
+type responseWriter struct {
+	http.ResponseWriter
+	status int
+}
 
+func (rw *responseWriter) WriteHeader(code int) {
+	rw.status = code
+	rw.ResponseWriter.WriteHeader(code)
+}
+
+func loggingMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		path := r.URL.Path
+		if r.URL.RawQuery != "" {
+			path += "?" + r.URL.RawQuery
+		}
+		log.Printf("Started %s %s", r.Method, path)
+
+		rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
+		next.ServeHTTP(rw, r)
+		log.Printf("Completed %s %s %d in %v", r.Method, path, rw.status, time.Since(start))
+	})
+}
+
+func startServers(authzService *AuthzService, httpProxy, httpsProxy http.Handler, k8sClient client.Client) (httpServer, httpsServer *http.Server) {
+	// API Handler
+	apiMux := http.NewServeMux()
+	if k8sClient != nil {
+		apiHandler := NewAPIHandler(k8sClient)
+		apiHandler.RegisterRoutes(apiMux)
+	}
+	apiHandler := authMiddleware(apiMux)
+
+	// UI Handler
+	ui := uiHandler()
+
+	// Proxy Handler
 	// Middleware chain: auth -> authz -> prom-label-proxy
-	// 1. authMiddleware: validates JWT and extracts sub/groups
-	// 2. authzMiddleware: checks policy.csv and populates allowed cluster/namespace pairs
-	// 3. prom-label-proxy: injects namespace labels based on authorized resources
-	handler := authMiddleware(
+	proxyHandler := authMiddleware(
 		authzService.authzMiddleware("read")(
-			promProxy,
+			httpProxy,
 		),
 	)
 
-	mux.Handle("/", handler)
+	// Main Handler with dispatch logic
+	mainHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Management API
+		if strings.HasPrefix(r.URL.Path, "/api/v1/rules") {
+			apiHandler.ServeHTTP(w, r)
+			return
+		}
+
+		// UI
+		if strings.HasPrefix(r.URL.Path, "/ui/") || r.URL.Path == "/ui" {
+			http.StripPrefix("/ui", ui).ServeHTTP(w, r)
+			return
+		}
+
+		// Default: Proxy
+		proxyHandler.ServeHTTP(w, r)
+	})
 
 	httpServer = &http.Server{
 		Addr:    fmt.Sprintf("127.0.0.1:%d", redirectPortHTTP),
-		Handler: mux,
+		Handler: loggingMiddleware(mainHandler),
 	}
 	log.Println("Starting HTTP server on port", redirectPortHTTP)
 
@@ -265,16 +337,27 @@ func startServers(authzService *AuthzService, promProxy http.Handler) (httpServe
 	}()
 
 	if f_tlsCert != "" && f_tlsKey != "" {
-		httpsMux := http.NewServeMux()
-		httpsHandler := authMiddleware(
+		httpsProxyHandler := authMiddleware(
 			authzService.authzMiddleware("read")(
-				promProxy,
+				httpsProxy,
 			),
 		)
-		httpsMux.Handle("/", httpsHandler)
+
+		httpsMainHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if strings.HasPrefix(r.URL.Path, "/api/v1/rules") {
+				apiHandler.ServeHTTP(w, r)
+				return
+			}
+			if strings.HasPrefix(r.URL.Path, "/ui/") || r.URL.Path == "/ui" {
+				http.StripPrefix("/ui", ui).ServeHTTP(w, r)
+				return
+			}
+			httpsProxyHandler.ServeHTTP(w, r)
+		})
+
 		httpsServer = &http.Server{
 			Addr:    fmt.Sprintf("127.0.0.1:%d", redirectPortHTTPS),
-			Handler: httpsMux,
+			Handler: loggingMiddleware(httpsMainHandler),
 		}
 		log.Println("Starting HTTPS server on port", redirectPortHTTPS)
 		go func() {
@@ -285,6 +368,24 @@ func startServers(authzService *AuthzService, promProxy http.Handler) (httpServe
 		}()
 	}
 	return httpServer, httpsServer
+}
+
+type loggingRoundTripper struct {
+	next http.RoundTripper
+}
+
+func (l *loggingRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
+	start := time.Now()
+	log.Printf("Upstream Request: %s %s", r.Method, r.URL.String())
+
+	resp, err := l.next.RoundTrip(r)
+	if err != nil {
+		log.Printf("Upstream Error: %s %s: %v", r.Method, r.URL.String(), err)
+		return nil, err
+	}
+
+	log.Printf("Upstream Response: %s %s %d in %v", r.Method, r.URL.String(), resp.StatusCode, time.Since(start))
+	return resp, nil
 }
 
 func main() {
@@ -310,12 +411,11 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	var ipt iptablesInterface
-	var err error
+	var nft nftablesInterface
 
 	if f_iptables {
 		if os.Geteuid() != 0 {
-			log.Fatal("Run as root for iptables support")
+			log.Fatal("Run as root for nftables support")
 		}
 
 		if f_configPath == "" {
@@ -324,16 +424,14 @@ func main() {
 		if _, err := os.Stat(f_configPath); os.IsNotExist(err) {
 			log.Fatalf("Config file does not exist: %s", f_configPath)
 		}
-		ipt, err = iptables.New()
-		if err != nil {
-			log.Fatalf("Failed to initialize iptables: %v", err)
-		}
+
+		nft = &nftablesRunner{}
 
 		cfg, err := loadConfig()
 		if err != nil {
 			log.Fatalf("Failed to load config: %v", err)
 		}
-		applyRules(ipt, cfg)
+		applyRules(nft, cfg)
 	}
 
 	if f_iptables {
@@ -344,28 +442,57 @@ func main() {
 				log.Printf("Reload failed: %v", err)
 				return
 			}
-			applyRules(ipt, newCfg)
+			applyRules(nft, newCfg)
 		})
 	}
 
-	authzService, err := NewAuthzService(ctx, f_policyPath)
+	// Initialize Kubernetes client
+	var k8sClient client.Client
+	k8sConfig, err := ctrl.GetConfig()
+	if err != nil {
+		log.Printf("Failed to get k8s config (running in file-only mode): %v", err)
+	} else {
+		if err := grafoov1alpha1.AddToScheme(scheme.Scheme); err != nil {
+			log.Fatalf("Failed to add grafoo types to scheme: %v", err)
+		}
+		k8sClient, err = client.New(k8sConfig, client.Options{Scheme: scheme.Scheme})
+		if err != nil {
+			log.Fatalf("Failed to create k8s client: %v", err)
+		}
+		log.Println("Kubernetes client initialized")
+	}
+
+	authzService, err := NewAuthzService(ctx, f_policyPath, k8sClient)
 	if err != nil {
 		log.Fatalf("Failed to initialize authorization service: %v", err)
 	}
 
-	// Initialize JWKS before serving requests
-	if err := initJWKS(); err != nil {
-		log.Fatalf("Failed to initialize JWKS: %v", err)
+	// Initialize Auth (JWKS or TokenReview)
+	if err := initAuth(); err != nil {
+		log.Fatalf("Failed to initialize auth: %v", err)
 	}
 
-	// Create Prometheus proxy with label injection
-	promProxy, err := newPrometheusProxy(f_upstreamURL, f_injectionLabel)
+	// Configure global HTTP transport for proxies
+	tlsConfig, err := getTLSConfig()
 	if err != nil {
-		log.Fatalf("Failed to create Prometheus proxy: %v", err)
+		log.Fatalf("Failed to get TLS config: %v", err)
 	}
-	log.Printf("Prometheus proxy created: upstream=%s, label=%s", f_upstreamURL, f_injectionLabel)
+	if tlsConfig != nil {
+		if t, ok := http.DefaultTransport.(*http.Transport); ok {
+			t.TLSClientConfig = tlsConfig
+			log.Println("Configured global HTTP transport with custom TLS settings")
+		}
+	}
 
-	httpServer, httpsServer := startServers(authzService, promProxy)
+	http.DefaultTransport = &loggingRoundTripper{next: http.DefaultTransport}
+
+	// Create Dynamic Proxies for HTTP and HTTPS
+	httpProxy := NewDynamicProxy("http", f_injectionLabel)
+	httpsProxy := NewDynamicProxy("https", f_injectionLabel)
+
+	log.Printf("Dynamic proxies created with label=%s", f_injectionLabel)
+
+	httpServer, httpsServer := startServers(authzService, httpProxy, httpsProxy, k8sClient)
 
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM)

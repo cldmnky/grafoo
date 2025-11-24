@@ -86,6 +86,7 @@ func main() {
 	flag.StringVar(&config.DexImage, "dex-image", lookupEnvOrDefault("RELATED_IMAGE_DEX", config.DexImage), "The image to use for the Dex container")
 	flag.StringVar(&config.GrafanaVersion, "grafana-version", lookupEnvOrDefault("GRAFANA_VERSION", config.GrafanaVersion), "The version of Grafana to use")
 	flag.StringVar(&config.MariaDBImage, "mariadb-image", lookupEnvOrDefault("RELATED_IMAGE_MARIADB", config.MariaDBImage), "The image to use for the MariaDB container")
+	flag.StringVar(&config.DSProxyImage, "dsproxy-image", lookupEnvOrDefault("RELATED_IMAGE_DSPROXY", config.DSProxyImage), "The image to use for the DSProxy container")
 
 	opts := zap.Options{
 		Development: true,
@@ -96,7 +97,7 @@ func main() {
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
 
 	// Print related images
-	setupLog.Info("Related images", "dex", config.DexImage, "grafana", config.GrafanaVersion, "mariadb", config.MariaDBImage)
+	setupLog.Info("Related images", "dex", config.DexImage, "grafana", config.GrafanaVersion, "mariadb", config.MariaDBImage, "dsproxy", config.DSProxyImage)
 
 	// Print version and exit
 	if showVersion {

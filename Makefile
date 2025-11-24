@@ -52,6 +52,8 @@ OPERATOR_SDK_VERSION ?= v1.34.2
 
 # Image URL to use all building/pushing image targets
 IMG ?= $(IMAGE_TAG_BASE):latest
+# DSPROXY_IMG defines the image:tag used for the dsproxy.
+DSPROXY_IMG ?= $(IMAGE_TAG_BASE)-dsproxy:latest
 # ENVTEST_K8S_VERSION refers to the version of kubebuilder assets to be downloaded by envtest binary.
 ENVTEST_K8S_VERSION = 1.30.0
 
@@ -112,8 +114,8 @@ vet: ## Run go vet against code.
 	go vet ./...
 
 .PHONY: test
-test: manifests generate fmt vet envtest ## Run tests.
-	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list ./... | grep -v /e2e) -coverprofile cover.out
+test: manifests generate fmt ui-build vet envtest ## Run tests.
+	KUBEBUILDER_ASSETS="$(shell $(ENVTEST) use $(ENVTEST_K8S_VERSION) --bin-dir $(LOCALBIN) -p path)" go test $$(go list -f '{{if .TestGoFiles}}{{.ImportPath}}{{end}}' ./... | grep -v /e2e) -coverprofile cover.out
 
 # Utilize Kind or modify the e2e tests to load the image locally, enabling compatibility with other vendors.
 .PHONY: test-e2e  # Run the e2e tests against a Kind k8s instance that is spun up.
@@ -163,6 +165,14 @@ release: semver
 build: manifests generate fmt vet ## Build manager binary.
 	go build -o bin/manager cmd/grafoo/main.go
 
+.PHONY: ui-build
+ui-build: ## Build the UI assets.
+	cd cmd/dsproxy/ui && npm install && npm run build
+
+.PHONY: build-dsproxy
+build-dsproxy: manifests generate fmt vet ui-build ## Build dsproxy binary.
+	go build -o bin/dsproxy ./cmd/dsproxy
+
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
 	go run ./cmd/grafoo/main.go
@@ -176,9 +186,22 @@ docker-build:  manifests generate fmt vet ko ## Build docker image with the mana
 		--bare=true \
 		./cmd/grafoo
 
+.PHONY: docker-build-dsproxy
+docker-build-dsproxy: manifests generate ## Build docker image with the dsproxy.
+	-$(CONTAINER_TOOL) manifest rm ${DSPROXY_IMG}
+	-$(CONTAINER_TOOL) rmi ${DSPROXY_IMG}
+	$(CONTAINER_TOOL) build --manifest ${DSPROXY_IMG} --pull --platform linux/amd64,linux/arm64 -f cmd/dsproxy/Dockerfile .
+
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
 	$(CONTAINER_TOOL) push ${IMG}
+
+.PHONY: docker-push-dsproxy
+docker-push-dsproxy: ## Push docker image with the dsproxy.
+	$(CONTAINER_TOOL) manifest push ${DSPROXY_IMG} docker://${DSPROXY_IMG}
+
+.PHONY: containers
+containers: docker-build docker-build-dsproxy ## Build and push all images.
 
 ##@ Deployment
 

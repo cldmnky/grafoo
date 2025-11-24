@@ -3,6 +3,7 @@
 # It should be run by config/default
 resources:
 - bases/grafoo.cloudmonkey.org_grafanas.yaml
+- bases/grafoo.cloudmonkey.org_grafanadatasourcerules.yaml
 #+kubebuilder:scaffold:crdkustomizeresource
 
 patches:

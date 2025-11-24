@@ -118,6 +118,10 @@ spec:
                   and dex.<IngressDomain>.
                 pattern: ^([a-z0-9]+(-[a-z0-9]+)*\.)+[a-z]{2,}$
                 type: string
+              enableDSProxy:
+                default: false
+                description: Enable DSProxy sidecar
+                type: boolean
               enableMCOO:
                 default: false
                 description: Enable multicluster observability operator
@@ -152,7 +156,7 @@ spec:
                 pattern: ^([0-9]+(\.[0-9]+)?(ns|us|µs|ms|s|m|h))+$
                 type: string
               version:
-                default: 9.5.17
+                default: 12.3.0
                 description: Version is the version of Grafana to deploy
                 pattern: ^([0-9]+(\.[0-9]+){0,2})$
                 type: string

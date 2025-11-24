@@ -90,12 +90,14 @@ type GrafanaReconciler struct {
 // +kubebuilder:rbac:groups="",resources=serviceaccounts/token,verbs=get;create
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups="",resources=configmaps,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=apps,resources=deployments/status,verbs=get
 // +kubebuilder:rbac:groups=config.openshift.io,resources=ingresses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=grafana.integreatly.org,resources=grafanadatasources,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=grafana.integreatly.org,resources=grafanas,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=grafoo.cloudmonkey.org,resources=grafanas,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=grafoo.cloudmonkey.org,resources=grafanadatasourcerules,verbs=get;list;watch
 // +kubebuilder:rbac:groups=grafoo.cloudmonkey.org,resources=grafanas/finalizers,verbs=update
 // +kubebuilder:rbac:groups=grafoo.cloudmonkey.org,resources=grafanas/status,verbs=get;update;patch
 // +kubebuilder:rbac:groups=loki.grafana.com,resources=application,resourceNames=logs,verbs=get
@@ -106,7 +108,8 @@ type GrafanaReconciler struct {
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterrolebindings,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=rbac.authorization.k8s.io,resources=clusterroles,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=authorization.k8s.io,resources=subjectaccessreviews,verbs=create
-// +kubebuilder:rbac:groups=authorization.k8s.io,resources=tokenreviews,verbs=create
+// +kubebuilder:rbac:groups=authentication.k8s.io,resources=tokenreviews,verbs=create
+// +kubebuilder:rbac:groups=security.openshift.io,resources=securitycontextconstraints,resourceNames=privileged,verbs=use
 // +kubebuilder:rbac:groups=tempo.grafana.com,resources=dev,resourceNames=traces,verbs=get
 // +kubebuilder:rbac:groups=tempo.grafana.com,resources=prod,resourceNames=traces,verbs=get
 // +kubebuilder:rbac:groups=logging.openshift.io,resources=clusterloggings,verbs=get;list;watch
@@ -261,6 +264,14 @@ func (r *GrafanaReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 			})
 		}
 	}
+
+	// Reconcile DSProxy ConfigMap before Grafana deployment
+	// This ensures the ConfigMap exists before the pod tries to mount it
+	if err := r.reconcileDSProxyConfig(ctx, grafooInstance); err != nil {
+		logger.Error(err, "Failed to reconcile dsproxy config")
+		GrafanaReconcilerErrors.WithLabelValues(req.Namespace, req.Name, "dsproxy_config_reconciliation_failed").Inc()
+	}
+
 	// Reconcile Grafana
 	if err := r.ReconcileGrafana(ctx, grafooInstance); err != nil {
 		logger.Error(err, "Failed to reconcile grafana")
@@ -345,6 +356,7 @@ func (r *GrafanaReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&corev1.Secret{}).
 		Owns(&corev1.ServiceAccount{}).
 		Owns(&corev1.Service{}).
+		Owns(&corev1.ConfigMap{}).
 		Owns(&rbacv1.ClusterRoleBinding{}).
 		Owns(&networkingv1.Ingress{}).
 		WithEventFilter(predicate.GenerationChangedPredicate{}).

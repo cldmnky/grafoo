@@ -7,22 +7,33 @@ import (
 	"net/http"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/casbin/casbin/v2"
+	"github.com/casbin/casbin/v2/persist"
 	fileadapter "github.com/casbin/casbin/v2/persist/file-adapter"
 	"github.com/fsnotify/fsnotify"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
 type AuthzService struct {
 	Enforcer    *casbin.Enforcer
 	policyFile  string
 	policyModel string
+	k8sClient   client.Client
 }
 
-func NewAuthzService(ctx context.Context, policyPath string) (*AuthzService, error) {
+func NewAuthzService(ctx context.Context, policyPath string, k8sClient client.Client) (*AuthzService, error) {
 	policyFile := filepath.Join(policyPath, "policy.csv")
 	policyModel := filepath.Join(policyPath, "model.conf")
-	adapter := fileadapter.NewAdapter(policyFile)
+
+	var adapter persist.Adapter
+	if k8sClient != nil {
+		adapter = NewK8sAdapter(k8sClient, policyFile)
+	} else {
+		adapter = fileadapter.NewAdapter(policyFile)
+	}
+
 	enforcer, err := casbin.NewEnforcer(policyModel, adapter)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create enforcer: %w", err)
@@ -31,7 +42,7 @@ func NewAuthzService(ctx context.Context, policyPath string) (*AuthzService, err
 		return nil, fmt.Errorf("failed to load policy: %w", err)
 	}
 
-	authz := &AuthzService{Enforcer: enforcer, policyFile: policyFile, policyModel: policyModel}
+	authz := &AuthzService{Enforcer: enforcer, policyFile: policyFile, policyModel: policyModel, k8sClient: k8sClient}
 	go authz.watchPolicyAndModel(ctx)
 	return authz, nil
 }
@@ -51,6 +62,23 @@ func (a *AuthzService) Authorize(subject string, groups []string, domain, cluste
 }
 
 func (a *AuthzService) watchPolicyAndModel(ctx context.Context) {
+	if a.k8sClient != nil {
+		// Polling for K8s
+		ticker := time.NewTicker(30 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				log.Println("[authz] stopping k8s policy watcher")
+				return
+			case <-ticker.C:
+				if err := a.Enforcer.LoadPolicy(); err != nil {
+					log.Printf("[authz] failed to reload policy from k8s: %v", err)
+				}
+			}
+		}
+	}
+
 	watcher, err := fsnotify.NewWatcher()
 	if err != nil {
 		log.Printf("[authz] failed to initialize watcher: %v", err)
@@ -107,6 +135,7 @@ func (a *AuthzService) authzMiddleware(action string) func(http.Handler) http.Ha
 				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 				return
 			}
+			log.Printf("[authz-debug] loaded %d policies", len(allPolicies))
 
 			subjects := append(groups, email)
 			allowed := map[string]struct{}{}
@@ -136,6 +165,7 @@ func (a *AuthzService) authzMiddleware(action string) func(http.Handler) http.Ha
 				// Check if subject matches (direct or via role)
 				subjectMatches := false
 				for _, sub := range subjects {
+					log.Printf("[authz-debug] checking sub '%s' against policySub '%s'", sub, policySub)
 					if policySub == sub {
 						subjectMatches = true
 						break

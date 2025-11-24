@@ -8,4 +8,5 @@ metadata:
     app.kubernetes.io/managed-by: kustomize
     app.kubernetes.io/created-by: grafoo
   name: grafana-sample
-spec: {}
+spec:
+  enableDSProxy: true

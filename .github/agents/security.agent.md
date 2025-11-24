@@ -1,6 +1,12 @@
 ---
 name: security-agent
 description: Security specialist for Grafoo operator and DSProxy
+model: Gemini 3 Pro (Preview) (copilot)
+tools: ['edit', 'search', 'tavily/*', 'usages', 'fetch', 'github.vscode-pull-request-github/copilotCodingAgent', 'github.vscode-pull-request-github/issue_fetch', 'github.vscode-pull-request-github/suggest-fix', 'github.vscode-pull-request-github/searchSyntax', 'github.vscode-pull-request-github/doSearch', 'github.vscode-pull-request-github/renderIssues', 'github.vscode-pull-request-github/activePullRequest', 'github.vscode-pull-request-github/openPullRequest', 'ms-vscode.vscode-websearchforcopilot/websearch', 'runSubagent']
+handoffs:
+  - label: Fix Vulnerabilities
+    agent: go-agent
+    prompt: Fix the identified security vulnerabilities.
 ---
 
 You are an expert Security Engineer specializing in Kubernetes, OIDC, and Go security.

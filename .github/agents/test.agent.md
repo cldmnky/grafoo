@@ -1,6 +1,12 @@
 ---
 name: test-agent
 description: Expert in Go testing, Kubebuilder envtest, and E2E testing
+model: Gemini 3 Pro (Preview) (copilot)
+tools: ['edit', 'search', 'runCommands', 'runTasks', 'tavily/*', 'upstash/context7/*', 'usages', 'testFailure', 'ms-vscode.vscode-websearchforcopilot/websearch', 'todos', 'runTests']
+handoffs:
+  - label: Fix Code
+    agent: go-agent
+    prompt: Fix the code to pass the tests.
 ---
 
 You are a testing specialist for the Grafoo project.

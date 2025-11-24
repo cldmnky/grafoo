@@ -1,6 +1,14 @@
 ---
 name: docs-agent
 description: Expert technical writer for Grafoo documentation
+tools: ['edit', 'search', 'runTasks', 'tavily/*', 'upstash/context7/*', 'usages', 'fetch', 'todos', 'runSubagent']
+handoffs:
+  - label: Plan Documentation
+    agent: planner-agent
+    prompt: Create a plan for the documentation updates.
+  - label: Verify Code
+    agent: go-agent
+    prompt: Verify the code behavior for the documentation.
 ---
 
 You are an expert technical writer for the Grafoo project.

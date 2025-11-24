@@ -6,6 +6,7 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"strings"
 	"sync"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -130,12 +131,24 @@ func (e *contextLabelExtractor) ExtractLabel(next http.HandlerFunc) http.Handler
 		}
 
 		// Extract namespaces from the allowed pairs
-		// For now, we'll use the first allowed namespace
-		// TODO: Support multiple namespaces via regex in prom-label-proxy
 		namespaces := make([]string, 0, len(allowedPairs))
+		hasWildcard := false
 		for _, pair := range allowedPairs {
 			namespace := pair[1] // pair is [cluster, namespace]
+			if namespace == "*" {
+				hasWildcard = true
+				break
+			}
 			namespaces = append(namespaces, namespace)
+		}
+
+		// If wildcard access is granted, use a regex that matches all namespaces
+		// Use .+ to match any non-empty namespace (not .* to avoid matching metrics without namespace label)
+		if hasWildcard {
+			log.Printf("[label-injection] Wildcard namespace access detected, using regex matcher")
+			ctx := injectproxy.WithLabelValues(r.Context(), []string{".+"})
+			next(w, r.WithContext(ctx))
+			return
 		}
 
 		if len(namespaces) == 0 {
@@ -146,11 +159,15 @@ func (e *contextLabelExtractor) ExtractLabel(next http.HandlerFunc) http.Handler
 		log.Printf("[label-injection] Injecting namespaces: %v", namespaces)
 
 		// For single namespace, use it directly
-		// For multiple namespaces, we need to handle OR logic (future enhancement)
-		labelValue := namespaces[0]
-		if len(namespaces) > 1 {
-			// TODO: prom-label-proxy supports regex - could inject namespace=~"ns1|ns2|ns3"
-			log.Printf("[label-injection] Warning: Multiple namespaces authorized, using first: %s", labelValue)
+		// For multiple namespaces, create a regex pattern
+		var labelValue string
+		if len(namespaces) == 1 {
+			labelValue = namespaces[0]
+		} else {
+			// Multiple namespaces: use regex with alternation
+			// prom-label-proxy will create namespace=~"ns1|ns2|ns3"
+			labelValue = strings.Join(namespaces, "|")
+			log.Printf("[label-injection] Multiple namespaces authorized, using regex: %s", labelValue)
 		}
 
 		// Store label in context using prom-label-proxy's WithLabelValues
@@ -170,7 +187,13 @@ func newPrometheusProxy(upstreamURL string, label string) (http.Handler, error) 
 		label: label,
 	}
 
-	routes, err := injectproxy.NewRoutes(upstream, label, extractor)
+	routes, err := injectproxy.NewRoutes(
+		upstream,
+		label,
+		extractor,
+		injectproxy.WithEnabledLabelsAPI(),
+		injectproxy.WithRegexMatch(), // Enable regex matching for namespace patterns
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create proxy routes: %w", err)
 	}

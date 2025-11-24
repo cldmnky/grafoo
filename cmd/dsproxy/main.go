@@ -90,9 +90,10 @@ func (r *nftablesRunner) FlushRules() error {
 }
 
 func (r *nftablesRunner) AddRedirectRule(ip string, port, targetPort int) error {
-	// nft add rule ip nat OUTPUT ip daddr 1.2.3.4 tcp dport 80 counter dnat to 127.0.0.1:5533
+	// nft add rule ip nat OUTPUT meta skuid != 0 ip daddr 1.2.3.4 tcp dport 80 counter dnat to 127.0.0.1:5533
 	args := []string{
 		"add", "rule", "ip", "nat", "OUTPUT",
+		"meta", "skuid", "!=", "0",
 		"ip", "daddr", ip,
 		"tcp", "dport", fmt.Sprintf("%d", port),
 		"counter",
@@ -369,6 +370,24 @@ func startServers(authzService *AuthzService, httpProxy, httpsProxy http.Handler
 	return httpServer, httpsServer
 }
 
+type loggingRoundTripper struct {
+	next http.RoundTripper
+}
+
+func (l *loggingRoundTripper) RoundTrip(r *http.Request) (*http.Response, error) {
+	start := time.Now()
+	log.Printf("Upstream Request: %s %s", r.Method, r.URL.String())
+
+	resp, err := l.next.RoundTrip(r)
+	if err != nil {
+		log.Printf("Upstream Error: %s %s: %v", r.Method, r.URL.String(), err)
+		return nil, err
+	}
+
+	log.Printf("Upstream Response: %s %s %d in %v", r.Method, r.URL.String(), resp.StatusCode, time.Since(start))
+	return resp, nil
+}
+
 func main() {
 	flag.Parse()
 	if f_iptables {
@@ -464,6 +483,8 @@ func main() {
 			log.Println("Configured global HTTP transport with custom TLS settings")
 		}
 	}
+
+	http.DefaultTransport = &loggingRoundTripper{next: http.DefaultTransport}
 
 	// Create Dynamic Proxies for HTTP and HTTPS
 	httpProxy := NewDynamicProxy("http", f_injectionLabel)

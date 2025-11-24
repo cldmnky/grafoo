@@ -26,8 +26,8 @@ COPY --from=ui-builder /app/dist cmd/dsproxy/ui/dist
 RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o dsproxy ./cmd/dsproxy
 
 # Final image
-FROM alpine:latest
-RUN apk add --no-cache nftables
+FROM quay.io/centos/centos:stream9
+RUN dnf install -y nftables && dnf clean all
 
 WORKDIR /
 COPY --from=builder /workspace/dsproxy .

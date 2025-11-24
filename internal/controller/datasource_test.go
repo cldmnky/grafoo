@@ -46,6 +46,7 @@ var _ = Describe("Datasource Controller", func() {
 							StorageSize: "1Gi",
 							Image:       grafoov1alpha1.MariaDBImage,
 						},
+						EnableDSProxy: true,
 						TokenDuration: &metav1.Duration{Duration: time.Minute * 1440},
 					},
 				}

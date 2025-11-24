@@ -28,7 +28,7 @@ func (r *GrafanaReconciler) ReconcileDataSources(ctx context.Context, instance *
 	if needsRefresh {
 		request := &authenticationv1.TokenRequest{
 			Spec: authenticationv1.TokenRequestSpec{
-				Audiences:         []string{"grafoo"},
+				Audiences:         []string{"https://kubernetes.default.svc"},
 				ExpirationSeconds: int64Ptr(int64(instance.Spec.TokenDuration.Duration.Seconds())),
 			},
 		}

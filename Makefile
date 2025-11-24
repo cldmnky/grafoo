@@ -188,7 +188,9 @@ docker-build:  manifests generate fmt vet ko ## Build docker image with the mana
 
 .PHONY: docker-build-dsproxy
 docker-build-dsproxy: manifests generate ## Build docker image with the dsproxy.
-	$(CONTAINER_TOOL) build --platform linux/amd64,linux/arm64 -t ${DSPROXY_IMG} -f cmd/dsproxy/Dockerfile .
+	-$(CONTAINER_TOOL) manifest rm ${DSPROXY_IMG}
+	-$(CONTAINER_TOOL) rmi ${DSPROXY_IMG}
+	$(CONTAINER_TOOL) build --manifest ${DSPROXY_IMG} --pull --platform linux/amd64,linux/arm64 -f cmd/dsproxy/Dockerfile .
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.
@@ -196,7 +198,7 @@ docker-push: ## Push docker image with the manager.
 
 .PHONY: docker-push-dsproxy
 docker-push-dsproxy: ## Push docker image with the dsproxy.
-	$(CONTAINER_TOOL) push ${DSPROXY_IMG}
+	$(CONTAINER_TOOL) manifest push ${DSPROXY_IMG} docker://${DSPROXY_IMG}
 
 .PHONY: containers
 containers: docker-build docker-build-dsproxy ## Build and push all images.

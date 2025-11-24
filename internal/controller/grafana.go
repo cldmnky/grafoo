@@ -158,7 +158,7 @@ func (r *GrafanaReconciler) buildGrafanaSpec(ctx context.Context, instance *graf
 							"--jwks-url=" + r.generateRouteUriForComponent(ctx, instance, "dex") + "/.well-known/openid-configuration",
 							"--policy-path=/etc/dsproxy/policy",
 							"--token-review=true",
-							"--jwt-audience=grafana",
+							"--jwt-audience=grafana", // This is needed dex: issues tokens with audience 'grafana'
 							"--insecure-skip-verify=true",
 						},
 						VolumeMounts: []corev1.VolumeMount{

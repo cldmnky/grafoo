@@ -28,4 +28,6 @@ dist/
 .mcp-debug-tools/
 
 cmd/dsproxy/ui/node_modules/
-cmd/dsproxy/ui/dist/
+# The production UI build is embedded into the DSProxy binary via go:embed
+# and therefore must be committed so clean checkouts can compile.
+!cmd/dsproxy/ui/dist/

@@ -6,6 +6,9 @@ import (
 	"log"
 	"net/http"
 	"net/url"
+	"regexp"
+	"sort"
+	"strings"
 
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/prometheus-community/prom-label-proxy/injectproxy"
@@ -35,12 +38,6 @@ func authMiddleware(next http.Handler) http.Handler {
 		claims, ok := token.Claims.(jwt.MapClaims)
 		if !ok {
 			http.Error(w, "Invalid token claims", http.StatusUnauthorized)
-			return
-		}
-		// check aud
-		aud, ok := claims["aud"].(string)
-		if !ok || aud != f_jwtAudience {
-			http.Error(w, "Invalid audience", http.StatusUnauthorized)
 			return
 		}
 
@@ -93,6 +90,28 @@ func extractStringSlice(raw any) []string {
 	return result
 }
 
+// globToRegex converts a Casbin keyMatch2-style namespace pattern into a
+// PromQL regex. `*` matches any sequence, `?` matches a single character.
+// A bare `*` (e.g. from the `cluster/*` or `*/*` policies) becomes `.+` which
+// matches any non-empty value.
+func globToRegex(pattern string) string {
+	if pattern == "*" {
+		return ".+"
+	}
+	var b strings.Builder
+	for _, ch := range pattern {
+		switch ch {
+		case '*':
+			b.WriteString(".*")
+		case '?':
+			b.WriteString(".")
+		default:
+			b.WriteString(regexp.QuoteMeta(string(ch)))
+		}
+	}
+	return b.String()
+}
+
 // contextLabelExtractor extracts namespace labels from allowed resources
 // determined by Casbin authorization and implements the injectproxy.ExtractLabeler interface
 type contextLabelExtractor struct {
@@ -110,29 +129,25 @@ func (e *contextLabelExtractor) ExtractLabel(next http.HandlerFunc) http.Handler
 			return
 		}
 
-		// Extract namespaces from the allowed pairs
-		// For now, we'll use the first allowed namespace
-		// TODO: Support multiple namespaces via regex in prom-label-proxy
-		namespaces := make([]string, 0, len(allowedPairs))
+		// Translate each authorized resource's namespace part into a regex.
+		// The authz middleware already sorted the pairs, so the result is
+		// deterministic. All authorized namespaces are injected as a single
+		// regex (e.g. namespace=~"monitoring|alerting") via the proxy's
+		// regex match mode. Identical regexes (e.g. the same namespace name
+		// authorized in multiple clusters) are deduplicated.
+		regexes := make([]string, 0, len(allowedPairs))
+		seen := map[string]bool{}
 		for _, pair := range allowedPairs {
-			namespace := pair[1] // pair is [cluster, namespace]
-			namespaces = append(namespaces, namespace)
+			re := globToRegex(pair[1])
+			if !seen[re] {
+				seen[re] = true
+				regexes = append(regexes, re)
+			}
 		}
+		sort.Strings(regexes)
+		labelValue := strings.Join(regexes, "|")
 
-		if len(namespaces) == 0 {
-			http.Error(w, "No authorized namespaces found", http.StatusForbidden)
-			return
-		}
-
-		log.Printf("[label-injection] Injecting namespaces: %v", namespaces)
-
-		// For single namespace, use it directly
-		// For multiple namespaces, we need to handle OR logic (future enhancement)
-		labelValue := namespaces[0]
-		if len(namespaces) > 1 {
-			// TODO: prom-label-proxy supports regex - could inject namespace=~"ns1|ns2|ns3"
-			log.Printf("[label-injection] Warning: Multiple namespaces authorized, using first: %s", labelValue)
-		}
+		log.Printf("[label-injection] Injecting namespace regex: %s", labelValue)
 
 		// Store label in context using prom-label-proxy's WithLabelValues
 		ctx := injectproxy.WithLabelValues(r.Context(), []string{labelValue})
@@ -151,7 +166,14 @@ func newPrometheusProxy(upstreamURL string, label string) (http.Handler, error) 
 		label: label,
 	}
 
-	routes, err := injectproxy.NewRoutes(upstream, label, extractor)
+	// WithRegexMatch makes the injected label a regex matcher, which is how
+	// wildcard policies (dev-* -> dev-.*) and multi-namespace access
+	// (ns1|ns2) are enforced.
+	// WithEnabledLabelsAPI turns on /api/v1/labels and /api/v1/label/<n>/values.
+	routes, err := injectproxy.NewRoutes(upstream, label, extractor,
+		injectproxy.WithRegexMatch(),
+		injectproxy.WithEnabledLabelsAPI(),
+	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create proxy routes: %w", err)
 	}

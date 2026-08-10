@@ -1,72 +1,20 @@
 package main
 
 import (
-	"crypto/rand"
-	"encoding/base64"
-	"encoding/json"
-	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"testing"
-	"time"
 
-	"github.com/golang-jwt/jwt/v5"
 	. "github.com/onsi/gomega"
 )
 
-// Note: proxyHandler tests removed as we now use prom-label-proxy integration
-// which provides its own proxy implementation with label injection.
-// The main functionality is tested through integration tests.
-
+// The authMiddleware is tested end-to-end with a real RSA-signed token so the
+// full chain (JWKS -> signature -> audience -> expiration -> sub extraction)
+// is exercised.
 func TestAuthMiddleware_SuccessAndFailure(t *testing.T) {
 	RegisterTestingT(t)
-
-	// Generate a random 32-byte symmetric key for HS256
-	key := make([]byte, 32)
-	_, err := rand.Read(key)
-	Expect(err).To(BeNil())
-	encodedKey := base64.RawURLEncoding.EncodeToString(key)
-
-	// Mock JWKS endpoint with a key that includes a "kid":"test"
-	jwksJSON := fmt.Sprintf(`{"keys":[{"kty":"oct","k":"%s","kid":"test"}]}`, encodedKey)
-	jwksSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, jwksJSON)
-	}))
-	defer jwksSrv.Close()
-
-	// Mock OIDC discovery endpoint
-	discoverySrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		resp := map[string]string{"jwks_uri": jwksSrv.URL}
-		_ = json.NewEncoder(w).Encode(resp)
-	}))
-	defer discoverySrv.Close()
-
-	// Patch global jwksURL to point to our mock discovery endpoint
-	origJWKSURL := f_jwksURL
-	f_jwksURL = discoverySrv.URL
-	defer func() { f_jwksURL = origJWKSURL }()
-
-	// Call initJWKS and expect no error
-	err = initJWKS()
-	Expect(err).To(BeNil())
-	Expect(jwks).ToNot(BeNil())
-
-	// Create a valid JWT signed with the test key
-	token := jwt.NewWithClaims(jwt.SigningMethodHS256, jwt.MapClaims{
-		"sub":            "1234567890",
-		"name":           "John Doe",
-		"iat":            time.Now().Unix(),
-		"aud":            "example-app",
-		"iss":            "https://example.com",
-		"exp":            time.Now().Add(time.Hour).Unix(),
-		"email":          "kube:admin",
-		"email_verified": false,
-		"groups":         []string{"system:authenticated", "system:cluster-admins"},
-	})
-	token.Header["kid"] = "test"
-	tokenStr, err := token.SignedString(key)
-	Expect(err).To(BeNil())
+	env := setupJWKS(t)
 
 	// Handler to wrap
 	finalHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -80,10 +28,10 @@ func TestAuthMiddleware_SuccessAndFailure(t *testing.T) {
 		Expect(groups).To(Equal([]string{"system:authenticated", "system:cluster-admins"}))
 	})
 
-	// Compose middleware
 	handler := authMiddleware(finalHandler)
 
 	// --- Test: Valid token ---
+	tokenStr := env.signToken(t, defaultClaims())
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Header.Set("Authorization", "Bearer "+tokenStr)
 	w := httptest.NewRecorder()
@@ -110,4 +58,69 @@ func TestAuthMiddleware_SuccessAndFailure(t *testing.T) {
 	w4 := httptest.NewRecorder()
 	handler.ServeHTTP(w4, req4)
 	Expect(w4.Code).To(Equal(http.StatusUnauthorized))
+
+	// --- Test: Token without exp ---
+	claims := defaultClaims()
+	delete(claims, "exp")
+	req5 := httptest.NewRequest("GET", "/", nil)
+	req5.Header.Set("Authorization", "Bearer "+env.signToken(t, claims))
+	w5 := httptest.NewRecorder()
+	handler.ServeHTTP(w5, req5)
+	Expect(w5.Code).To(Equal(http.StatusUnauthorized))
+
+	// --- Test: Wrong audience ---
+	claims = defaultClaims()
+	claims["aud"] = "wrong-audience"
+	req6 := httptest.NewRequest("GET", "/", nil)
+	req6.Header.Set("Authorization", "Bearer "+env.signToken(t, claims))
+	w6 := httptest.NewRecorder()
+	handler.ServeHTTP(w6, req6)
+	Expect(w6.Code).To(Equal(http.StatusUnauthorized))
+
+	// --- Test: Missing subject ---
+	claims = defaultClaims()
+	delete(claims, "sub")
+	req7 := httptest.NewRequest("GET", "/", nil)
+	req7.Header.Set("Authorization", "Bearer "+env.signToken(t, claims))
+	w7 := httptest.NewRecorder()
+	handler.ServeHTTP(w7, req7)
+	Expect(w7.Code).To(Equal(http.StatusUnauthorized))
+}
+
+func TestAuthMiddleware_ExtractsDatasourceAndRemovesAuthorization(t *testing.T) {
+	RegisterTestingT(t)
+	env := setupJWKS(t)
+
+	finalHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		Expect(r.Header.Get("Authorization")).To(BeEmpty())
+		Expect(r.Context().Value(ContextDataSourceID)).To(Equal("prometheus-prod"))
+		Expect(r.Context().Value(ContextDataSourceType)).To(Equal("prometheus"))
+		io.WriteString(w, "OK")
+	})
+
+	handler := authMiddleware(finalHandler)
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("Authorization", "Bearer "+env.signToken(t, defaultClaims()))
+	req.Header.Set("X-Datasource-Uid", "prometheus-prod")
+	req.Header.Set("X-Datasource-Type", "prometheus")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	Expect(w.Code).To(Equal(http.StatusOK))
+}
+
+func TestGlobToRegex(t *testing.T) {
+	RegisterTestingT(t)
+	testCases := []struct {
+		pattern string
+		want    string
+	}{
+		{"monitoring", "monitoring"},
+		{"*", ".+"},
+		{"dev-*", "dev-.*"},
+		{"backend-?", "backend-."},
+		{"team-a.b", `team-a\.b`},
+	}
+	for _, tc := range testCases {
+		Expect(globToRegex(tc.pattern)).To(Equal(tc.want), "pattern %q", tc.pattern)
+	}
 }

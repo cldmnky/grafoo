@@ -14,6 +14,8 @@ import (
 	"net"
 	"net/http"
 	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -26,14 +28,17 @@ import (
 type fakeIPTables struct {
 	existsRules  map[string]bool
 	appendCalled []string
+	deleteCalled []string
 	appendErr    error
 	existsErr    error
+	deleteErr    error
 }
 
 func newFakeIPTables() *fakeIPTables {
 	return &fakeIPTables{
 		existsRules:  make(map[string]bool),
 		appendCalled: []string{},
+		deleteCalled: []string{},
 	}
 }
 
@@ -49,6 +54,30 @@ func (f *fakeIPTables) AppendUnique(table, chain string, rulespec ...string) err
 	key := fmt.Sprintf("%s|%s|%v", table, chain, rulespec)
 	f.appendCalled = append(f.appendCalled, key)
 	return f.appendErr
+}
+
+func (f *fakeIPTables) Delete(table, chain string, rulespec ...string) error {
+	key := fmt.Sprintf("%s|%s|%v", table, chain, rulespec)
+	f.deleteCalled = append(f.deleteCalled, key)
+	return f.deleteErr
+}
+
+func (f *fakeIPTables) appendedRuleSpecs() []string {
+	specs := make([]string, 0, len(f.appendCalled))
+	for _, c := range f.appendCalled {
+		parts := strings.SplitN(c, "|", 3)
+		specs = append(specs, parts[2])
+	}
+	return specs
+}
+
+func (f *fakeIPTables) deletedRuleSpecs() []string {
+	specs := make([]string, 0, len(f.deleteCalled))
+	for _, c := range f.deleteCalled {
+		parts := strings.SplitN(c, "|", 3)
+		specs = append(specs, parts[2])
+	}
+	return specs
 }
 
 // Generate a temporary TLS cert and key for testing
@@ -118,36 +147,29 @@ var _ = BeforeSuite(func() {
 
 var _ = Describe("startServers", func() {
 	var (
-		origFTlsCert string
-		origFTlsKey  string
+		testCert, testKey string
 	)
 
 	BeforeEach(func() {
 		// Generate temporary TLS cert and key for testing
-		f_tlsCert, f_tlsKey = generateTempTLSFiles()
-		// Store original values to restore later
-		origFTlsCert = f_tlsCert
-		origFTlsKey = f_tlsKey
+		testCert, testKey = generateTempTLSFiles()
 	})
 
 	AfterEach(func() {
-		f_tlsCert = origFTlsCert
-		f_tlsKey = origFTlsKey
+		os.Remove(testCert)
+		os.Remove(testKey)
 	})
 
 	It("should return a non-nil HTTP server", func() {
-		f_tlsCert = ""
-		f_tlsKey = ""
 		authService := &AuthzService{}
 		mockProxy := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		})
-		httpSrv, httpsSrv := startServers(authService, mockProxy)
+		httpSrv, httpsSrv := startServers(authService, mockProxy, "", "")
 		Expect(httpSrv).ToNot(BeNil())
 		Expect(httpsSrv).To(BeNil())
 		Expect(httpSrv.Addr).To(ContainSubstring(fmt.Sprintf("%d", redirectPortHTTP)))
 		httpSrv.Close()
-
 	})
 
 	It("should return both HTTP and HTTPS servers if TLS cert and key are set", func() {
@@ -155,8 +177,7 @@ var _ = Describe("startServers", func() {
 		mockProxy := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		})
-		httpSrv, httpsSrv := startServers(authService, mockProxy)
-		fmt.Fprintf(GinkgoWriter, "httpSrv: %+v, httpsSrv: %+v\n", httpSrv, httpsSrv)
+		httpSrv, httpsSrv := startServers(authService, mockProxy, testCert, testKey)
 		Expect(httpSrv).ToNot(BeNil())
 		Expect(httpsSrv).ToNot(BeNil())
 		Expect(httpSrv.Addr).To(ContainSubstring(fmt.Sprintf("%d", redirectPortHTTP)))
@@ -171,12 +192,8 @@ var _ = Describe("startServers", func() {
 		mockProxy := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 		})
-		httpSrv, httpsSrv := startServers(authService, mockProxy)
+		httpSrv, httpsSrv := startServers(authService, mockProxy, testCert, testKey)
 		Expect(httpSrv).ToNot(BeNil())
-		// The nil pointer dereference warning (SA5011) is about calling Close() on a possibly nil pointer.
-		// The check `if httpSrv != nil { httpSrv.Close() }` is safe, but staticcheck warns that
-		// if httpSrv is nil, calling Close() would panic. Since we just asserted it's not nil, this is safe.
-		// However, if you remove the Expect(httpSrv).ToNot(BeNil()), you could get a nil pointer dereference.
 		if httpSrv != nil {
 			httpSrv.Close()
 		}
@@ -186,51 +203,76 @@ var _ = Describe("startServers", func() {
 	})
 })
 
-var _ = Describe("iptables rule management", func() {
-	var fake *fakeIPTables
+var _ = Describe("config parsing", func() {
+	var origConfigPath string
 
 	BeforeEach(func() {
-		fake = newFakeIPTables()
+		origConfigPath = f_configPath
 	})
 
-	It("should detect existing iptables rule", func() {
-		ip := "1.2.3.4"
-		port := 80
-		key := fmt.Sprintf("nat|OUTPUT|[%s %s %s %s %s %s %s %s %s %s]",
-			"-p", "tcp", "-d", ip, "--dport", fmt.Sprintf("%d", port), "-j", "REDIRECT", "--to-port", fmt.Sprintf("%d", redirectPortHTTP))
-		fake.existsRules[key] = true
-		Expect(iptablesRuleExists(fake, ip, port)).To(BeTrue())
+	AfterEach(func() {
+		f_configPath = origConfigPath
 	})
 
-	It("should add iptables rule if not exists", func() {
-		ip := "1.2.3.4"
-		port := 80
-		Expect(addIptablesRule(fake, ip, port)).To(Succeed())
-		Expect(fake.appendCalled).To(HaveLen(1))
+	It("should parse the documented YAML shape", func() {
+		dir := GinkgoT().TempDir()
+		path := filepath.Join(dir, "dsproxy.yaml")
+		content := `proxies:
+  - domain: thanos-querier.openshift-monitoring.svc.cluster.local
+    proxies:
+      http: [9091]
+      https: [9091]
+  - domain: another.example.com
+    proxies:
+      http: [80, 8080]
+      https: [443]
+`
+		Expect(os.WriteFile(path, []byte(content), 0644)).To(Succeed())
+		f_configPath = path
+
+		cfg, err := loadConfig()
+		Expect(err).To(BeNil())
+		Expect(cfg.Proxies).To(HaveLen(2))
+
+		first := cfg.Proxies[0]
+		Expect(first.Domain).To(Equal("thanos-querier.openshift-monitoring.svc.cluster.local"))
+		Expect(first.Proxy.HTTP).To(Equal([]int{9091}))
+		Expect(first.Proxy.HTTPS).To(Equal([]int{9091}))
+
+		second := cfg.Proxies[1]
+		Expect(second.Proxy.HTTP).To(Equal([]int{80, 8080}))
+		Expect(second.Proxy.HTTPS).To(Equal([]int{443}))
 	})
 
-	It("should not add rule if already exists", func() {
-		ip := "1.2.3.4"
-		port := 80
-		key := fmt.Sprintf("nat|OUTPUT|[%s %s %s %s %s %s %s %s %s %s]",
-			"-p", "tcp", "-d", ip, "--dport", fmt.Sprintf("%d", port), "-j", "REDIRECT", "--to-port", fmt.Sprintf("%d", redirectPortHTTP))
-		fake.existsRules[key] = true
-		Expect(addIptablesRule(fake, ip, port)).To(Succeed())
-		Expect(fake.appendCalled).To(HaveLen(0))
+	It("should fail for a missing config file", func() {
+		f_configPath = filepath.Join(GinkgoT().TempDir(), "does-not-exist.yaml")
+		_, err := loadConfig()
+		Expect(err).ToNot(BeNil())
 	})
 
-	It("should handle error from Exists", func() {
-		ip := "1.2.3.4"
-		port := 80
-		fake.existsErr = errors.New("fail")
-		Expect(iptablesRuleExists(fake, ip, port)).To(BeFalse())
+	It("should fail for invalid YAML", func() {
+		dir := GinkgoT().TempDir()
+		path := filepath.Join(dir, "dsproxy.yaml")
+		Expect(os.WriteFile(path, []byte("proxies: [not valid"), 0644)).To(Succeed())
+		f_configPath = path
+		_, err := loadConfig()
+		Expect(err).ToNot(BeNil())
+	})
+})
+
+var _ = Describe("iptables rule management", func() {
+	It("should build a rulespec with the given redirect port", func() {
+		spec := ruleSpec("1.2.3.4", 443, redirectPortHTTPS)
+		joined := strings.Join(spec, " ")
+		Expect(joined).To(ContainSubstring("--to-port 5534"))
+		Expect(joined).To(ContainSubstring("-d 1.2.3.4"))
+		Expect(joined).To(ContainSubstring("--dport 443"))
 	})
 
-	It("should return error if AppendUnique fails", func() {
-		ip := "1.2.3.4"
-		port := 80
-		fake.appendErr = errors.New("append fail")
-		Expect(addIptablesRule(fake, ip, port)).ToNot(Succeed())
+	It("should reject invalid ports", func() {
+		Expect(validatePort(0)).ToNot(BeNil())
+		Expect(validatePort(65536)).ToNot(BeNil())
+		Expect(validatePort(80)).To(BeNil())
 	})
 })
 
@@ -247,7 +289,7 @@ var _ = Describe("resolveDomainIP", func() {
 	})
 })
 
-var _ = Describe("applyRules", func() {
+var _ = Describe("iptablesManager", func() {
 	var (
 		fake                *fakeIPTables
 		origResolveDomainIP func(string) (string, error)
@@ -256,88 +298,167 @@ var _ = Describe("applyRules", func() {
 	BeforeEach(func() {
 		fake = newFakeIPTables()
 		origResolveDomainIP = resolveDomainIP
+		resolveDomainIP = func(domain string) (string, error) {
+			switch domain {
+			case "fail.com":
+				return "", errors.New("dns fail")
+			default:
+				return "1.2.3.4", nil
+			}
+		}
 	})
 
 	AfterEach(func() {
 		resolveDomainIP = origResolveDomainIP
 	})
 
-	It("should add rules for all http and https ports", func() {
-		resolveDomainIP = func(domain string) (string, error) {
-			return "1.2.3.4", nil
-		}
+	It("should redirect http ports to the HTTP listener and https ports to the HTTPS listener", func() {
+		mgr := newIptablesManager(fake)
 		cfg := &Config{
 			Proxies: []ProxyRule{
 				{
 					Domain: "example.com",
-					Proxies: []Proxies{
-						{http: []int{80, 8080}, https: []int{443}},
-					},
+					Proxy:  ProxyPorts{HTTP: []int{80, 8080}, HTTPS: []int{443}},
 				},
 			},
 		}
-		applyRules(fake, cfg)
-		Expect(fake.appendCalled).To(HaveLen(3))
+		mgr.apply(cfg)
+
+		specs := fake.appendedRuleSpecs()
+		Expect(specs).To(HaveLen(3))
+		var httpRedirects, httpsRedirects int
+		for _, s := range specs {
+			if strings.Contains(s, "--to-port 5533") {
+				httpRedirects++
+			}
+			if strings.Contains(s, "--to-port 5534") {
+				httpsRedirects++
+			}
+		}
+		Expect(httpRedirects).To(Equal(2))
+		Expect(httpsRedirects).To(Equal(1))
 	})
 
-	It("should skip rule if DNS fails", func() {
-		resolveDomainIP = func(domain string) (string, error) {
-			return "", errors.New("dns fail")
-		}
+	It("should be idempotent for identical configurations", func() {
+		mgr := newIptablesManager(fake)
 		cfg := &Config{
 			Proxies: []ProxyRule{
 				{
-					Domain: "bad.com",
-					Proxies: []Proxies{
-						{http: []int{80}, https: []int{443}},
-					},
+					Domain: "example.com",
+					Proxy:  ProxyPorts{HTTP: []int{80}, HTTPS: []int{443}},
 				},
 			},
 		}
-		applyRules(fake, cfg)
-		Expect(fake.appendCalled).To(BeEmpty())
+		mgr.apply(cfg)
+		mgr.apply(cfg)
+		Expect(fake.appendCalled).To(HaveLen(2))
 	})
 
-	It("should continue applying rules for multiple proxies even if one fails DNS", func() {
-		resolveDomainIP = func(domain string) (string, error) {
-			if domain == "fail.com" {
-				return "", errors.New("dns fail")
-			}
-			return "5.6.7.8", nil
+	It("should remove stale rules when a proxy entry is removed from the config", func() {
+		mgr := newIptablesManager(fake)
+		cfg1 := &Config{
+			Proxies: []ProxyRule{
+				{
+					Domain: "example.com",
+					Proxy:  ProxyPorts{HTTP: []int{80}},
+				},
+			},
 		}
+		mgr.apply(cfg1)
+		Expect(fake.appendCalled).To(HaveLen(1))
+
+		mgr.apply(&Config{})
+		Expect(fake.deleteCalled).To(HaveLen(1))
+		Expect(fake.deletedRuleSpecs()[0]).To(ContainSubstring("--to-port 5533"))
+	})
+
+	It("should skip rules for domains that fail DNS resolution", func() {
+		mgr := newIptablesManager(fake)
 		cfg := &Config{
 			Proxies: []ProxyRule{
 				{
 					Domain: "fail.com",
-					Proxies: []Proxies{
-						{http: []int{80}},
-					},
-				},
-				{
-					Domain: "ok.com",
-					Proxies: []Proxies{
-						{http: []int{8080}, https: []int{8443}},
-					},
+					Proxy:  ProxyPorts{HTTP: []int{80}, HTTPS: []int{443}},
 				},
 			},
 		}
-		applyRules(fake, cfg)
-		Expect(fake.appendCalled).To(HaveLen(2))
+		mgr.apply(cfg)
+		Expect(fake.appendCalled).To(BeEmpty())
 	})
 
-	It("should handle empty proxies list", func() {
-		resolveDomainIP = func(domain string) (string, error) {
-			return "1.2.3.4", nil
-		}
+	It("should skip invalid ports", func() {
+		mgr := newIptablesManager(fake)
 		cfg := &Config{
 			Proxies: []ProxyRule{
 				{
-					Domain:  "empty.com",
-					Proxies: []Proxies{},
+					Domain: "example.com",
+					Proxy:  ProxyPorts{HTTP: []int{0, 80}, HTTPS: []int{70000}},
 				},
 			},
 		}
-		applyRules(fake, cfg)
-		Expect(fake.appendCalled).To(BeEmpty())
+		mgr.apply(cfg)
+		Expect(fake.appendCalled).To(HaveLen(1))
+		Expect(fake.appendedRuleSpecs()[0]).To(ContainSubstring("--dport 80"))
+	})
+
+	It("should clean up all installed rules", func() {
+		mgr := newIptablesManager(fake)
+		cfg := &Config{
+			Proxies: []ProxyRule{
+				{
+					Domain: "example.com",
+					Proxy:  ProxyPorts{HTTP: []int{80}, HTTPS: []int{443}},
+				},
+			},
+		}
+		mgr.apply(cfg)
+		Expect(fake.appendCalled).To(HaveLen(2))
+
+		mgr.cleanup()
+		Expect(fake.deleteCalled).To(HaveLen(2))
+		Expect(mgr.installed).To(BeEmpty())
+
+		// Second cleanup is a no-op
+		fake.deleteCalled = []string{}
+		mgr.cleanup()
+		Expect(fake.deleteCalled).To(BeEmpty())
+	})
+
+	It("should apply rules for multiple proxies even if one fails DNS", func() {
+		mgr := newIptablesManager(fake)
+		cfg := &Config{
+			Proxies: []ProxyRule{
+				{
+					Domain: "fail.com",
+					Proxy:  ProxyPorts{HTTP: []int{80}},
+				},
+				{
+					Domain: "ok.com",
+					Proxy:  ProxyPorts{HTTP: []int{8080}, HTTPS: []int{8443}},
+				},
+			},
+		}
+		mgr.apply(cfg)
+		Expect(fake.appendCalled).To(HaveLen(2))
+	})
+
+	It("should skip rules for the upstream domain to avoid self-interception", func() {
+		mgr := newIptablesManager(fake)
+		mgr.addSkipDomain("thanos-querier.example.com")
+		cfg := &Config{
+			Proxies: []ProxyRule{
+				{
+					Domain: "thanos-querier.example.com",
+					Proxy:  ProxyPorts{HTTP: []int{9091}},
+				},
+				{
+					Domain: "other.example.com",
+					Proxy:  ProxyPorts{HTTP: []int{80}},
+				},
+			},
+		}
+		mgr.apply(cfg)
+		Expect(fake.appendCalled).To(HaveLen(1))
+		Expect(fake.appendedRuleSpecs()[0]).To(ContainSubstring("--dport 80"))
 	})
 })

@@ -1,0 +1,30 @@
+# Build the DSProxy binary with the embedded UI assets.
+# DSProxy needs root and iptables (NET_ADMIN) at runtime, so the final image
+# is UBI9 (not distroless nonroot).
+
+# Stage 1: build the web UI
+FROM node:22 AS ui
+WORKDIR /ui
+COPY cmd/dsproxy/ui/package.json cmd/dsproxy/ui/package-lock.json ./
+RUN npm ci
+COPY cmd/dsproxy/ui/ ./
+RUN npm run build
+
+# Stage 2: build the Go binary
+FROM golang:1.24 AS builder
+ARG TARGETOS
+ARG TARGETARCH
+WORKDIR /workspace
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/dsproxy/ cmd/dsproxy/
+COPY --from=ui /ui/dist cmd/dsproxy/ui/dist
+RUN CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build -a -o dsproxy ./cmd/dsproxy
+
+# Stage 3: runtime image
+FROM registry.access.redhat.com/ubi9/ubi-minimal:9.4
+RUN microdnf install -y iptables && microdnf clean all
+WORKDIR /
+COPY --from=builder /workspace/dsproxy .
+# The proxy runs as root because it manages iptables rules.
+ENTRYPOINT ["/dsproxy"]

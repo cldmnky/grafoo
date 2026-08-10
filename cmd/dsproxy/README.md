@@ -11,8 +11,9 @@ DSProxy runs as a sidecar container alongside Grafana or other applications that
 - **Casbin Authorization**: Policy-based access control determining which cluster/namespace pairs users can access
 - **Automatic Label Injection**: Injects authorized namespace labels into all PromQL queries via prom-label-proxy
 - **Multi-Tenancy Enforcement**: Ensures users only see metrics from namespaces allowed by policy.csv
-- **Prometheus API Support**: Handles `/api/v1/query`, `/api/v1/query_range`, `/api/v1/series`, and more
-- **Dynamic Configuration**: Hot-reload of iptables rules and authorization policies
+- **Prometheus API Support**: Handles `/api/v1/query`, `/api/v1/query_range`, `/api/v1/series`, `/api/v1/labels`, and more
+- **Dynamic Configuration**: Hot-reload of iptables rules, authorization policies, and the Casbin model
+- **Web UI**: React/PatternFly policy editor (served on port 3001, bound to loopback)
 
 ## Architecture
 
@@ -26,6 +27,8 @@ DSProxy runs as a sidecar container alongside Grafana or other applications that
 ┌─────────────────────────┐
 │    iptables (NAT)       │
 │ Redirects to 127.0.0.1  │
+│ HTTP  → 5533            │
+│ HTTPS → 5534            │
 └──────┬──────────────────┘
        │
        ↓
@@ -50,7 +53,7 @@ DSProxy runs as a sidecar container alongside Grafana or other applications that
 │  │ prom-label-proxy │   │
 │  │  - Parse PromQL  │   │
 │  │  - Inject Labels │   │
-│  │    {namespace=   │   │
+│  │    {namespace=~  │   │
 │  │     "tenant-a"}  │   │
 │  └────────┬─────────┘   │
 │           │             │
@@ -59,7 +62,7 @@ DSProxy runs as a sidecar container alongside Grafana or other applications that
 │  │  - Forward Req   │   │
 │  └──────────────────┘   │
 └──────┬──────────────────┘
-       │ PromQL: up{instance="localhost:9090",namespace="tenant-a"}
+       │ PromQL: up{instance="localhost:9090",namespace=~"tenant-a"}
        ↓
 ┌─────────────────────────┐
 │   Prometheus Server     │
@@ -72,9 +75,9 @@ DSProxy runs as a sidecar container alongside Grafana or other applications that
 
 DSProxy enforces multi-tenancy through a pipeline:
 
-1. **JWT Authentication**: Validates the token and extracts the `sub` (subject) claim as the user identity
+1. **JWT Authentication**: Validates the token signature, expiration, and audience; extracts the `sub` (subject) claim as the user identity
 2. **Casbin Authorization**: Queries `policy.csv` to determine which cluster/namespace pairs the user can access
-3. **Label Injection**: Uses prom-label-proxy to automatically inject the authorized namespace into PromQL queries
+3. **Label Injection**: Uses prom-label-proxy to inject the authorized namespace(s) into PromQL queries as a **regex matcher**
 
 **Example Transformation:**
 
@@ -89,8 +92,10 @@ up{instance="localhost:9090"}
 After authorization and label injection:
 
 ```promql
-up{instance="localhost:9090",namespace="namespace3"}
+up{instance="localhost:9090",namespace=~"namespace3"}
 ```
+
+Prometheus regex matchers are fully anchored, so `namespace=~"namespace3"` behaves exactly like `namespace="namespace3"`.
 
 This ensures users can **only see metrics** from namespaces authorized in `policy.csv`, providing true multi-tenancy through both authorization and query enforcement.
 
@@ -98,28 +103,35 @@ This ensures users can **only see metrics** from namespaces authorized in `polic
 
 ### 1. Traffic Interception (`main.go`)
 
-- **iptables Rules**: Creates NAT rules to redirect TCP traffic to local proxy ports
-- **Dynamic DNS Resolution**: Resolves domain names to IPs for iptables rules
-- **Config Hot-Reload**: Watches config file for changes and updates rules dynamically
+- **iptables Rules**: Creates NAT rules in the `nat/OUTPUT` chain that redirect TCP traffic to local proxy ports
+- **HTTP vs HTTPS**: HTTP destination ports are redirected to the plain HTTP listener (`5533`); HTTPS destination ports are redirected to the TLS listener (`5534`)
+- **Dynamic DNS Resolution**: Resolves domain names to IPs for iptables rules and re-resolves them every 60 seconds so rules track DNS changes
+- **Config Hot-Reload**: Watches the config file (including atomic replacements) for changes and applies the difference — rules that are no longer configured are removed
+- **Self-Interception Protection**: Rules for the `--upstream-url` hostname are never installed, so DSProxy's own connections to the upstream are not redirected back into itself
+- **Cleanup on Shutdown**: All installed rules are removed when DSProxy receives SIGINT/SIGTERM
 
 **Redirect Ports:**
 
 - HTTP: `5533`
 - HTTPS: `5534`
 
+> Note: HTTPS interception requires a TLS certificate/key pair. If the configured cert/key files are missing, the HTTPS listener is not started and HTTPS rules would point at a closed port. In that case, either provide TLS material or configure only HTTP ports.
+
 ### 2. Authentication (`validate.go`, `handlers.go`)
 
-- **JWKS Initialization**: Fetches public keys from OpenShift OIDC discovery endpoint
-- **Token Validation**: Verifies JWT signature, expiration, and audience
+- **JWKS Initialization**: Fetches public keys from the OpenShift OIDC discovery endpoint
+- **Token Validation**: Verifies JWT signature (RSA/ECDSA algorithms only), expiration (`exp` claim **required**), audience (string or array), and optionally issuer
 - **Identity Extraction**: Extracts `sub` claim as primary user identifier
 - **Context Propagation**: Stores user identity and groups in request context
 
 **JWT Claims Used:**
 
-- `sub`: User identifier (used for Casbin policy matching)
+- `sub`: User identifier (used for Casbin policy matching) - **required**
 - `email`: User email (optional metadata)
 - `groups`: User group memberships (used for Casbin role inheritance)
-- `aud`: Audience claim (validated)
+- `aud`: Audience claim - **required**, must contain the configured audience
+- `exp`: Expiration timestamp - **required**
+- `iss`: Issuer - only validated when `--jwt-issuer` is set
 
 ### 3. Authorization (`authz.go`)
 
@@ -128,34 +140,40 @@ Uses [Casbin](https://casbin.org) for policy-based access control:
 - **Policy Model**: RBAC with wildcards and pattern matching
 - **Policy File**: `authz/policy.csv` - defines subject → domain → resource → action permissions
 - **Resource Format**: `cluster/namespace` (e.g., `cluster1/namespace3`)
-- **Wildcards**: Supports `*/*` (all resources), `*/namespace` (namespace in any cluster), `cluster/*` (all namespaces in cluster)
-- **Hot-Reload**: Watches policy files for changes and reloads automatically
+- **Wildcards**: Supports `*/*` (all resources), `*/namespace` (namespace in any cluster), `cluster/*` (all namespaces in cluster), and pattern suffixes like `cluster1/dev-*`
+- **Datasource Wildcards**: Datasource domains support `keyMatch2` patterns (e.g., `prometheus-*`)
+- **Hot-Reload**: Watches the policy directory; changes to `policy.csv` or `model.conf` are reloaded automatically (no restart required)
 
 **Authorization Flow:**
 
 1. Extract `sub` and `groups` from JWT
-2. Query Casbin with `(subject, datasource, cluster/namespace, action)`
-3. Build list of authorized cluster/namespace pairs
+2. Iterate policies matching (subject, datasource, action)
+3. Build a sorted list of authorized cluster/namespace pairs
 4. Store in request context for label injection
 
 ### 4. Label Injection (`handlers.go` + `prom-label-proxy`)
 
-DSProxy integrates [prom-label-proxy](https://github.com/prometheus-community/prom-label-proxy) to automatically inject authorized namespace labels into PromQL queries:
+DSProxy integrates [prom-label-proxy](https://github.com/prometheus-community/prom-label-proxy) in **regex match mode** to automatically inject authorized namespace labels into PromQL queries:
 
-- **Custom Label Extractor**: Reads authorized namespaces from Casbin authorization context
-- **PromQL Parsing**: Parses queries from Prometheus API endpoints
-- **Automatic Injection**: Adds label matchers like `{namespace="namespace3"}` to all queries based on policy
-- **Multi-Namespace Support**: Currently uses first authorized namespace (TODO: support regex for multiple)
-- **Supported Endpoints**:
+- **Custom Label Extractor**: Reads authorized namespaces from the Casbin authorization context
+- **Wildcard Translation**: Casbin glob patterns are translated to PromQL regex:
+  - `dev-*` → `dev-.*`
+  - `backend-?` → `backend-.`
+  - `*` (from `cluster/*` or `*/*`) → `.+`
+- **Multi-Namespace Support**: All authorized namespaces are combined into a single regex union, e.g. `namespace=~"monitoring|alerting"`. The result is deterministic (sorted, deduplicated) across requests.
+- **Endpoints**:
   - `/api/v1/query` - Instant queries
   - `/api/v1/query_range` - Range queries
   - `/api/v1/series` - Series metadata
   - `/api/v1/labels` - Label names
   - `/api/v1/label/<name>/values` - Label values
+  - `/api/v1/query_exemplars` - Exemplars
+  - `/federate` - Federated data
+  - `/api/v1/alerts` and `/api/v1/rules` - Filtered by tenant label
 
 ### 5. Proxy Handler
 
-- **Transparent Proxying**: Forwards modified requests to upstream Prometheus
+- **Transparent Proxying**: Forwards modified requests to the upstream Prometheus
 - **Header Stripping**: Removes `Authorization` header to prevent credential forwarding
 - **Label Enforcement**: All queries are automatically filtered by tenant labels
 
@@ -170,9 +188,13 @@ DSProxy integrates [prom-label-proxy](https://github.com/prometheus-community/pr
 | `--tls-cert` | `DSPROXY_TLS_CERT` | `/etc/dsproxy/tls/tls.crt` | Path to TLS certificate |
 | `--tls-key` | `DSPROXY_TLS_KEY` | `/etc/dsproxy/tls/tls.key` | Path to TLS private key |
 | `--jwks-url` | `DSPROXY_JWKS_URL` | `https://oidc/.well-known/openid-configuration` | OIDC discovery URL |
+| `--jwt-audience` | `DSPROXY_JWT_AUDIENCE` | `example-app` | Expected JWT audience claim |
+| `--jwt-issuer` | `DSPROXY_JWT_ISSUER` | *(empty)* | Expected JWT issuer claim (empty = not validated) |
+| `--ca-bundle` | `DSPROXY_CA_BUNDLE` | *(empty)* | Path to CA bundle for verifying JWKS and upstream certificates |
 | `--policy-path` | `DSPROXY_POLICY_PATH` | `/etc/dsproxy/policy` | Directory containing Casbin policy files |
 | `--upstream-url` | `DSPROXY_UPSTREAM_URL` | `http://localhost:9090` | Upstream Prometheus server URL |
 | `--injection-label` | `DSPROXY_INJECTION_LABEL` | `namespace` | Label name to inject for multi-tenancy |
+| `--ui-port` | `DSPROXY_UI_PORT` | `3001` | Port to serve the web UI (bound to 127.0.0.1) |
 
 ### Proxy Configuration (`dsproxy.yaml`)
 
@@ -186,9 +208,12 @@ proxies:
       https: [9091]
 ```
 
+- `http` ports are redirected to the HTTP listener (`5533`)
+- `https` ports are redirected to the HTTPS listener (`5534`)
+
 ### Authorization Policy (`policy.csv`)
 
-Defines which users can access which cluster/namespace pairs. Located in `--policy-path` directory (default: `/etc/dsproxy/policy`).
+Defines which users can access which cluster/namespace pairs. Located in `--policy-path` directory (default: `/etc/dsproxy/policy`), together with `model.conf`.
 
 **Policy Format:**
 
@@ -208,7 +233,7 @@ g, bob@example.com, admin
 - `subject`: User identifier from JWT `sub` claim or group name
 - `domain`: Datasource ID from `X-Datasource-Uid` header (`*` = any datasource)
 - `object`: Resource in format `cluster/namespace` (supports wildcards)
-- `action`: Operation type (e.g., `read`, `write`)
+- `action`: Operation type (currently `read`)
 
 **Wildcards:**
 
@@ -219,7 +244,7 @@ g, bob@example.com, admin
 
 ## Policy Examples and Query Effects
 
-Below are concrete examples showing how different policies affect Prometheus queries:
+Below are concrete examples showing how different policies affect Prometheus queries.
 
 ### Example 1: Single Namespace Access
 
@@ -228,8 +253,6 @@ Below are concrete examples showing how different policies affect Prometheus que
 p, alice@example.com, prometheus-prod, cluster1/monitoring, read
 ```
 
-**JWT sub claim:** `alice@example.com`
-
 **Original Grafana Query:**
 ```promql
 rate(http_requests_total[5m])
@@ -237,7 +260,7 @@ rate(http_requests_total[5m])
 
 **Query Sent to Prometheus:**
 ```promql
-rate(http_requests_total{namespace="monitoring"}[5m])
+rate(http_requests_total{namespace=~"monitoring"}[5m])
 ```
 
 **Effect:** Alice can only see HTTP request rates from the `monitoring` namespace.
@@ -250,8 +273,6 @@ rate(http_requests_total{namespace="monitoring"}[5m])
 ```csv
 p, bob@example.com, *, cluster1/dev-*, read
 ```
-
-**JWT sub claim:** `bob@example.com`
 
 **Original Grafana Query:**
 ```promql
@@ -274,8 +295,6 @@ up{job="api-server",namespace=~"dev-.*"}
 p, system:cluster-admin, *, */*, read
 ```
 
-**JWT sub claim:** `system:cluster-admin`
-
 **Original Grafana Query:**
 ```promql
 container_memory_usage_bytes
@@ -283,10 +302,10 @@ container_memory_usage_bytes
 
 **Query Sent to Prometheus:**
 ```promql
-container_memory_usage_bytes{namespace="*"}
+container_memory_usage_bytes{namespace=~".+"}
 ```
 
-**Effect:** Cluster admin sees metrics from **all namespaces** without restriction.
+**Effect:** Cluster admin sees metrics from all namespaces (the regex matches any non-empty namespace value).
 
 ---
 
@@ -303,19 +322,17 @@ g, alice@example.com, team-backend
 g, charlie@example.com, team-backend
 ```
 
-**JWT sub claim:** `alice@example.com` (inherits `team-backend` role)
-
 **Original Grafana Query:**
 ```promql
 sum(rate(database_queries_total[1m])) by (pod)
 ```
 
-**Query Sent to Prometheus (first authorized namespace):**
+**Query Sent to Prometheus:**
 ```promql
-sum(rate(database_queries_total{namespace="backend-prod"}[1m])) by (pod)
+sum(rate(database_queries_total{namespace=~"backend-prod|backend-staging"}[1m])) by (pod)
 ```
 
-**Effect:** Alice (as member of `team-backend`) can query metrics from `backend-prod` and `backend-staging` namespaces. Currently, only the first authorized namespace is injected.
+**Effect:** Alice (as member of `team-backend`) can query metrics from **both** `backend-prod` and `backend-staging` namespaces. All authorized namespaces are injected as a regex union.
 
 ---
 
@@ -329,27 +346,15 @@ p, qa-team, *, */qa-*, read
 # Developers access dev environments
 p, developers, *, */dev-*, read
 
-# SRE team has full access
-p, sre-team, *, */*, read
-
 # Assign roles
 g, david@example.com, qa-team
 g, eve@example.com, developers
-```
-
-**JWT sub claim (David):** `david@example.com` → `qa-team`
-
-**Original Grafana Query:**
-```promql
-node_cpu_seconds_total
 ```
 
 **Query Sent to Prometheus (David/QA):**
 ```promql
 node_cpu_seconds_total{namespace=~"qa-.*"}
 ```
-
-**JWT sub claim (Eve):** `eve@example.com` → `developers`
 
 **Query Sent to Prometheus (Eve/Developers):**
 ```promql
@@ -371,26 +376,19 @@ p, alice@example.com, prometheus-dev, cluster1/*, read
 
 **Request with Header:** `X-Datasource-Uid: prometheus-prod`
 
-**JWT sub claim:** `alice@example.com`
-
-**Original Query:**
-```promql
-up
-```
-
 **Query Sent to Prometheus:**
 ```promql
-up{namespace="monitoring"}
+up{namespace=~"monitoring"}
 ```
 
 **Request with Header:** `X-Datasource-Uid: prometheus-dev`
 
 **Query Sent to Prometheus:**
 ```promql
-up{namespace="*"}
+up{namespace=~".+"}
 ```
 
-**Effect:** Alice has restricted access to `prometheus-prod` (monitoring namespace only) but full access to `prometheus-dev` (all namespaces).
+**Effect:** Alice has restricted access to `prometheus-prod` (monitoring namespace only) but full access to `prometheus-dev` (all namespaces). Note that DSProxy serves a **single upstream** configured via `--upstream-url`; datasource IDs select authorization policies, not different upstreams.
 
 ---
 
@@ -402,32 +400,24 @@ p, alice@example.com, prometheus-prod, cluster1/monitoring, read
 # No policy for cluster1/database
 ```
 
-**JWT sub claim:** `alice@example.com`
-
 **Request:** Query with manual namespace label:
 ```promql
 up{namespace="database"}
 ```
 
-**Response:** `403 Forbidden`
+**Response:** `200 OK` with the injected matcher ANDed with the user's matcher:
+```promql
+up{namespace="database",namespace=~"monitoring"}
+```
 
-**Effect:** Authorization middleware checks `policy.csv` and denies access since Alice is not authorized for the `database` namespace. The request never reaches prom-label-proxy.
-
----
+**Effect:** No series can satisfy both matchers, so the user gets an empty result. The conflicting user matcher is preserved (regex match mode), which means the query is not rejected, but it also cannot leak data from `database`. If the user has **no** authorized resources at all, the response is `403 Forbidden`.
 
 ### Important Notes
 
-1. **First Namespace Selection**: When a user is authorized for multiple namespaces, DSProxy currently injects the **first authorized namespace** into queries. A warning is logged:
-   ```
-   Warning: Multiple namespaces authorized, using first: namespace1
-   ```
-
-2. **Wildcard Injection**: For wildcard patterns (e.g., `dev-*`), prom-label-proxy injects a regex matcher: `{namespace=~"dev-.*"}`
-
-3. **Authorization Precedence**: Casbin evaluates policies in order. More specific rules should be defined before general rules.
-
+1. **Regex Injection**: All authorized namespaces are injected as a single regex matcher (`namespace=~"ns1|ns2"`). Prometheus regex matchers are fully anchored.
+2. **Wildcard Translation**: Casbin glob patterns are translated: `*` → `.*`, `?` → `.`, and a bare `*` (admin) → `.+`.
+3. **Deterministic Ordering**: Authorized namespaces are sorted and deduplicated before injection, so the injected regex is stable across requests.
 4. **Header Required**: The `X-Datasource-Uid` header must be present for datasource-specific policies. If missing, wildcard datasource (`*`) policies apply.
-
 5. **Grafana Integration**: When configuring Grafana datasources, set **Custom HTTP Headers** to include `X-Datasource-Uid` with the datasource identifier matching `policy.csv`.
 
 For detailed authorization configuration, policy examples, and troubleshooting, see [authz/README.md](./authz/README.md).
@@ -458,18 +448,19 @@ m = (g(r.sub, p.sub) || r.sub == p.sub) &&
 
 ### JWT Claims
 
-The proxy uses JWT tokens for authentication and identity:
+The proxy uses JWT tokens for authentication and identity.
 
 **Required JWT Claims:**
 
 - `sub`: Subject (user identifier) - **primary identity for authorization**
-- `aud`: Audience (validated during authentication)
-- `exp`: Expiration timestamp
+- `aud`: Audience - must contain the configured `--jwt-audience` (string or array form)
+- `exp`: Expiration timestamp - tokens without `exp` are rejected
 
 **Optional JWT Claims:**
 
 - `email`: User email address
 - `groups`: Array of group names (used for role-based authorization in Casbin)
+- `iss`: Issuer - validated only when `--jwt-issuer` is configured
 
 **Example JWT Payload:**
 
@@ -479,6 +470,7 @@ The proxy uses JWT tokens for authentication and identity:
   "email": "alice@example.com",
   "groups": ["team-backend", "developers"],
   "aud": "grafana",
+  "iss": "https://oauth-openshift.apps.cluster.local",
   "exp": 1735000000
 }
 ```
@@ -486,9 +478,9 @@ The proxy uses JWT tokens for authentication and identity:
 **Authorization Flow:**
 
 1. Extract `sub` from JWT (e.g., `alice@example.com`)
-2. Query Casbin: Does `alice@example.com` (or any of her groups) have access to `datasource1` → `cluster1/namespace3` → `read`?
-3. Build list of authorized cluster/namespace pairs
-4. Extract first authorized namespace and inject into PromQL queries via prom-label-proxy
+2. Query Casbin: Which resources (cluster/namespace) can `alice@example.com` (or any of her groups) access for datasource `datasource1` with action `read`?
+3. Build a sorted list of authorized cluster/namespace pairs
+4. Translate namespaces into a regex and inject it into PromQL queries via prom-label-proxy
 5. User sees only metrics from authorized namespace(s)
 
 ## Usage
@@ -501,6 +493,7 @@ For testing without Kubernetes:
 # Start with custom upstream Prometheus and policy path
 go run . --iptables=false \
   --jwks-url=https://oauth-openshift.apps.cluster.local/.well-known/openid-configuration \
+  --jwt-audience=grafana \
   --upstream-url=http://localhost:9090 \
   --injection-label=namespace \
   --policy-path=./cmd/dsproxy/authz
@@ -508,7 +501,7 @@ go run . --iptables=false \
 # Create a test policy (policy.csv)
 echo "p, testuser@example.com, prometheus-prod, cluster1/monitoring, read" > ./cmd/dsproxy/authz/policy.csv
 
-# Test with JWT (must have 'sub' claim matching policy.csv)
+# Test with JWT (must have 'sub' claim matching policy.csv, aud=grafana, and exp set)
 curl -H "Authorization: Bearer <jwt-with-sub-testuser>" \
      -H "X-Datasource-Uid: prometheus-prod" \
      http://localhost:5533/api/v1/query?query=up{job="api"}
@@ -528,7 +521,7 @@ Query transformation example:
 up{job="api"}
 
 # After authorization check, query sent to Prometheus
-up{job="api",namespace="monitoring"}
+up{job="api",namespace=~"monitoring"}
 ```
 
 **Testing Different Scenarios:**
@@ -545,7 +538,7 @@ echo "p, admin@example.com, *, */*, read" >> ./cmd/dsproxy/authz/policy.csv
 curl -H "Authorization: Bearer <jwt-with-sub-admin>" \
      -H "X-Datasource-Uid: prometheus-prod" \
      http://localhost:5533/api/v1/query?query=up
-# Expected: 200 OK with namespace="*" injected
+# Expected: 200 OK with namespace=~".+" injected
 
 # Test role inheritance
 echo "g, developer@example.com, team-backend" >> ./cmd/dsproxy/authz/policy.csv
@@ -553,12 +546,12 @@ echo "p, team-backend, *, cluster1/backend-prod, read" >> ./cmd/dsproxy/authz/po
 curl -H "Authorization: Bearer <jwt-with-sub-developer>" \
      -H "X-Datasource-Uid: prometheus-prod" \
      http://localhost:5533/api/v1/query?query=up
-# Expected: 200 OK with namespace="backend-prod" injected
+# Expected: 200 OK with namespace=~"backend-prod" injected
 ```
 
 ### Running in Kubernetes
 
-Deploy as a sidecar container with Grafana:
+Deploy as a **sidecar container** with Grafana:
 
 ```yaml
 apiVersion: v1
@@ -566,7 +559,7 @@ kind: Pod
 metadata:
   name: grafana-with-proxy
 spec:
-  initContainers:
+  containers:
   - name: dsproxy
     image: quay.io/cldmnky/dsproxy:latest
     args:
@@ -579,9 +572,10 @@ spec:
     volumeMounts:
     - name: config
       mountPath: /etc/dsproxy/config
+    - name: policy
+      mountPath: /etc/dsproxy/policy
     - name: tls
       mountPath: /etc/dsproxy/tls
-  containers:
   - name: grafana
     image: grafana/grafana:latest
     # Application traffic is automatically intercepted
@@ -589,10 +583,15 @@ spec:
   - name: config
     configMap:
       name: dsproxy-config
+  - name: policy
+    configMap:
+      name: dsproxy-policy    # must contain policy.csv and model.conf
   - name: tls
     secret:
       secretName: dsproxy-tls
 ```
+
+> DSProxy is a long-running process: it must run as a **regular sidecar**, not an init container. The policy volume must contain both `policy.csv` and `model.conf`.
 
 ## Request Flow
 
@@ -603,10 +602,11 @@ spec:
 2. **iptables intercepts** the request and redirects to `127.0.0.1:5534` (HTTPS) or `127.0.0.1:5533` (HTTP)
 
 3. **Auth middleware** (`authMiddleware` in `handlers.go`) processes the request:
-   - Validates JWT signature using JWKS from OIDC provider
-   - Checks audience and expiration claims
+   - Validates JWT signature using JWKS from OIDC provider (RSA/ECDSA only)
+   - Requires `exp` and `aud` claims (audience may be a string or array)
+   - Optionally validates the `iss` claim (`--jwt-issuer`)
    - Extracts `sub` claim (e.g., `alice@example.com`) as user identifier
-   - Optionally extracts `groups` claim for role inheritance
+   - Extracts `groups` claim for role inheritance
    - Stores `sub` in request context as `"user"`
 
 4. **Authz middleware** (`authzMiddleware` in `authz.go`) enforces authorization:
@@ -614,16 +614,16 @@ spec:
    - Iterates through all Casbin policies in `policy.csv`
    - Checks if user (via `sub` or `groups`) has access to datasource/cluster/namespace
    - Handles wildcards: `*/*`, `*/namespace`, `cluster/*`, `namespace-*`
-   - Builds list of authorized `[[cluster, namespace]]` pairs
+   - Builds a sorted list of authorized `[[cluster, namespace]]` pairs
    - Stores authorized pairs in request context as `"label_values"`
    - Returns `403 Forbidden` if no matching policy found
 
 5. **prom-label-proxy** (`contextLabelExtractor` in `handlers.go`) transforms the PromQL query:
-   - Extracts authorized namespaces from context via `contextLabelExtractor`
-   - Selects first authorized namespace (logs warning if multiple)
+   - Extracts authorized namespaces from context
+   - Translates glob patterns to regex and combines them into a single union (e.g., `monitoring|alerting`)
    - Parses the PromQL query AST
-   - Injects `{namespace="authorized-namespace"}` into all metric selectors
-   - Example: `up{job="api"}` → `up{job="api",namespace="monitoring"}`
+   - Injects `{namespace=~"..."}` into all metric selectors
+   - Example: `up{job="api"}` → `up{job="api",namespace=~"monitoring"}`
    - For wildcards: `up` → `up{namespace=~"dev-.*"}`
 
 6. **Proxy handler** forwards transformed request to upstream Prometheus:
@@ -634,38 +634,32 @@ spec:
 **Multi-Tenancy Enforcement**: 
 - **Authorization Layer**: Casbin checks `policy.csv` to determine allowed namespaces
 - **Query Layer**: prom-label-proxy injects namespace labels at PromQL AST level
-- **Result**: Users can only query metrics from namespaces authorized in `policy.csv`, preventing cross-tenant data access even if they manually specify namespace labels in queries
+- **Result**: Users can only query metrics from namespaces authorized in `policy.csv`. If a user manually specifies a conflicting namespace matcher, the injected matcher is ANDed with it, so the query can never return data from unauthorized namespaces.
 
 ## Security Considerations
 
 ### TLS Verification
 
-Currently, DSProxy **disables TLS verification** when:
+DSProxy **verifies TLS certificates** by default:
 
-- Fetching JWKS from OIDC discovery endpoint
-- Connecting to datasources
+- Fetching JWKS from the OIDC discovery endpoint: uses system trust store
+- Connecting to upstream datasources: uses system trust store
 
-**Rationale**: OpenShift internal services use self-signed certificates that may not be in the container's trust store.
+For internal services with self-signed certificates, provide a CA bundle:
 
-**Future Enhancement**: Support custom CA bundles for proper certificate validation.
+```bash
+dsproxy --ca-bundle=/etc/dsproxy/ca/ca.crt ...
+```
+
+The bundle is used for both JWKS and upstream connections.
 
 ### Token Validation
 
-- Validates JWT signature using RSA public keys from JWKS
-- Checks token expiration (`exp` claim)
-- Requires specific audience claim (configurable via JWT issuer)
-- Does NOT forward the bearer token to upstream Prometheus
-
-**Required JWT Claims:**
-
-- `sub`: User identifier (used for Casbin authorization)
-- `aud`: Audience validation
-- `exp`: Expiration timestamp
-
-**Optional JWT Claims:**
-
-- `email`: User email (for logging/auditing)
-- `groups`: User group memberships (for Casbin role inheritance)
+- Validates JWT signature using RSA (RS256/384/512) or ECDSA (ES256/384/512) public keys from JWKS. Symmetric algorithms (HS*) are rejected.
+- Requires the `exp` claim (tokens without expiration are rejected)
+- Requires the `aud` claim to contain the configured audience (string or array form)
+- Optionally validates the `iss` claim when `--jwt-issuer` is set
+- Does **NOT** forward the bearer token to upstream Prometheus
 
 ### Authorization Security
 
@@ -675,7 +669,7 @@ Currently, DSProxy **disables TLS verification** when:
 - Datasource-specific policies
 - Wildcard pattern matching with `keyMatch2`
 - Role inheritance via `g` directives
-- Hot-reload of policies without restart
+- Hot-reload of policies and model without restart
 
 **Policy Isolation**: Each request is authorized independently based on:
 
@@ -690,9 +684,8 @@ Currently, DSProxy **disables TLS verification** when:
 **How It Works:**
 
 - Queries are parsed into Abstract Syntax Tree (AST)
-- Authorized namespace label is injected into every metric selector
-- Users cannot remove or override the injected label
-- Queries contradicting the injected label return no results
+- The authorized namespace regex matcher is injected into every metric selector
+- User-supplied namespace matchers are preserved and ANDed with the injected matcher, so conflicting matchers can never leak data
 
 **Example:**
 
@@ -701,20 +694,25 @@ Currently, DSProxy **disables TLS verification** when:
 up{namespace="unauthorized-namespace"}
 
 # After authorization (user authorized for "monitoring")
-up{namespace="monitoring"}  # Original namespace filter is overridden
+up{namespace="unauthorized-namespace",namespace=~"monitoring"}
 
-# Prometheus only returns metrics from "monitoring" namespace
+# No series matches both matchers -> empty result, no data leak
 ```
 
-**Limitations**:
+### Policy Management UI Security
 
-- Label injection only works for PromQL queries (not for raw API endpoints like `/api/v1/labels`)
-- Multi-namespace access currently uses first authorized namespace (with warning logged)
-- Admin wildcard access (`*/*`) injects `namespace="*"` which may need Prometheus-side filtering
+The web UI is served on `127.0.0.1` only (port 3001). The policy API (`GET/POST /api/policy`) requires the same JWT authentication as the proxy endpoints. Access the UI via port-forward or place it behind an authenticated ingress/OAuth proxy that injects the `Authorization` header.
 
 ### Capabilities
 
-Requires `CAP_NET_ADMIN` capability to manipulate iptables rules. This is restricted to the init container in production deployments.
+Requires `CAP_NET_ADMIN` capability to manipulate iptables rules. The process also needs root (it runs as root in the container image).
+
+## Limitations
+
+- **Single Upstream**: DSProxy proxies to one upstream configured with `--upstream-url`. Datasource IDs (`X-Datasource-Uid`) select authorization policies, not different upstreams.
+- **Cluster Semantics**: Policies authorize `cluster/namespace` pairs, but the injected label is the namespace only. If the same namespace name exists in multiple clusters, the label alone cannot distinguish them. Point `--injection-label` at a cluster-scoped label (and adjust policies) if this is a concern.
+- **Alertmanager Silences**: In regex match mode, the Alertmanager silences API returns `501 Not implemented` (prom-label-proxy limitation). This proxy targets Prometheus query APIs.
+- **Admin Wildcard**: `*/*` injects `namespace=~".+"` which matches any non-empty namespace value. Series without the injected label are not returned.
 
 ## Testing
 
@@ -725,8 +723,8 @@ go test ./cmd/dsproxy/...
 # Run with verbose output
 go test -v ./cmd/dsproxy/...
 
-# Run specific test suite
-go test -v ./cmd/dsproxy/... -run TestPrometheusProxyIntegration
+# Run with race detection
+go test -race ./cmd/dsproxy/...
 
 # Run with coverage
 go test -coverprofile=coverage.out ./cmd/dsproxy/...
@@ -735,14 +733,21 @@ go tool cover -html=coverage.out
 
 ### Test Suites
 
-The project includes comprehensive tests covering:
+The project includes tests covering:
 
-1. **TestPrometheusProxyIntegration**: Full pipeline testing (auth → authz → label injection)
-2. **TestContextLabelExtractor**: Label extraction from Casbin context
-3. **TestNewPrometheusProxy**: Proxy initialization with valid/invalid URLs
-4. **TestLabelInjectionWithDifferentQueries**: PromQL query transformation patterns
-5. **TestQueryRangeEndpoint**: Range query support
-6. **TestMultipleNamespaceScenarios**: Multi-namespace authorization
+1. **TestPrometheusProxyIntegration**: Full pipeline testing (authz → label injection) with exact transformed-query assertions
+2. **TestWildcardPolicyInjection**: Casbin glob patterns translated to PromQL regex matchers
+3. **TestMultiNamespaceInjection**: Deterministic regex union for multiple authorized namespaces
+4. **TestUserNamespaceMatcherIsOverridden**: Conflicting user matchers cannot leak data
+5. **TestLabelsAPIEnabled**: `/api/v1/labels` and `/api/v1/label/<name>/values` proxied with injection
+6. **TestUpstreamTLSWithCABundle / WithoutCABundle**: Upstream certificate verification
+7. **TestPolicyHotReload**: policy.csv changes picked up without restart
+8. **TestTokenWithoutExpIsRejected / TestTokenWithArrayAudienceIsAccepted**: JWT claim validation
+9. **TestSymmetricSigningAlgorithmsAreRejected**: HS* tokens rejected
+10. **TestInitJWKSDiscoveryFailures**: OIDC discovery error handling
+11. **TestUIPolicyAPI\***: Policy API authentication, validation, and transactional saves
+12. **Config parsing**: Documented `dsproxy.yaml` shape
+13. **iptables manager**: HTTPS redirect target, stale-rule removal, cleanup, idempotency
 
 ### Manual Testing
 
@@ -752,6 +757,7 @@ Test authorization and label injection with a local Prometheus instance:
 # Start the proxy (without iptables for testing)
 go run . --iptables=false \
   --jwks-url=https://oauth-openshift.apps.cluster.local/.well-known/openid-configuration \
+  --jwt-audience=grafana \
   --upstream-url=http://localhost:9090 \
   --injection-label=namespace \
   --policy-path=./cmd/dsproxy/authz
@@ -768,29 +774,25 @@ curl -H "Authorization: Bearer <jwt-with-sub-testuser>" \
      -H "X-Datasource-Uid: prometheus-prod" \
      http://127.0.0.1:5533/api/v1/query?query=up{job="api"}
 # Expected: 200 OK
-# Query transformed: up{job="api",namespace="test-namespace"}
+# Query transformed: up{job="api",namespace=~"test-namespace"}
 
 # Test 2: Admin with wildcard access
 curl -H "Authorization: Bearer <jwt-with-sub-admin>" \
      -H "X-Datasource-Uid: prometheus-prod" \
      http://127.0.0.1:5533/api/v1/query?query=up
 # Expected: 200 OK
-# Query transformed: up{namespace="*"}
+# Query transformed: up{namespace=~".+"}
 
 # Test 3: Unauthorized datasource
 curl -H "Authorization: Bearer <jwt-with-sub-testuser>" \
      -H "X-Datasource-Uid: prometheus-dev" \
      http://127.0.0.1:5533/api/v1/query?query=up
 # Expected: 403 Forbidden (no policy for prometheus-dev)
-
-# Check the Prometheus logs to see the transformed queries
-# Or check DSProxy logs for authorization decisions:
-# [authz] allowing resource cluster1/test-namespace for subject testuser@example.com
 ```
 
 **Expected Behavior:**
 
-- Valid JWT with policy match: Query executes with injected namespace label
+- Valid JWT with policy match: Query executes with injected namespace regex
 - Valid JWT but no matching policy: `403 Forbidden` with authorization error
 - Missing or invalid JWT: `401 Unauthorized`
 - Missing `X-Datasource-Uid` header: Uses wildcard datasource (`*`) from policy
@@ -810,7 +812,24 @@ sudo iptables -t nat -L OUTPUT -n -v
 # Should see REDIRECT rules for configured domains
 ```
 
-**Solution**: Ensure DSProxy is running with root privileges and iptables support is enabled.
+**Solution**: Ensure DSProxy is running with root privileges and iptables support is enabled. Verify the config file matches the expected YAML shape (see [Proxy Configuration](#proxy-configuration-dsproxyyaml)).
+
+---
+
+### HTTPS Traffic Fails
+
+**Symptom**: HTTPS requests are redirected but fail
+
+**Check:**
+
+```bash
+# Verify the TLS listener is actually running
+ss -tlnp | grep 5534
+
+# Check logs for: TLS certificate file not found / TLS key file not found
+```
+
+**Solution**: Provide the TLS certificate/key pair (`--tls-cert`, `--tls-key`). HTTPS interception rules redirect to the HTTPS listener (5534), which only starts when both files exist.
 
 ---
 
@@ -821,15 +840,18 @@ sudo iptables -t nat -L OUTPUT -n -v
 **Check logs:**
 
 ```text
-Unauthorized: invalid token signature
+Unauthorized: token is expired
+Unauthorized: token has invalid audience
+Unauthorized: token has invalid claims: token is missing required claim: exp claim is required
 ```
 
 **Solution:**
 
 - Verify `--jwks-url` points to correct OIDC discovery endpoint
-- Check token has correct audience claim
-- Ensure token is not expired
-- Verify token signature matches JWKS public keys
+- Check token has correct audience claim (`--jwt-audience`)
+- Ensure token has an `exp` claim and is not expired
+- If `--jwt-issuer` is set, the token must carry a matching `iss` claim
+- Verify token signature matches JWKS public keys (RSA/ECDSA)
 
 ---
 
@@ -840,7 +862,7 @@ Unauthorized: invalid token signature
 **Check logs:**
 
 ```text
-[authz] no matching policy found for subject alice@example.com
+[authz] no resources allowed for subject alice@example.com
 ```
 
 **Debugging Steps:**
@@ -850,12 +872,6 @@ Unauthorized: invalid token signature
 ```bash
 # Decode JWT to check sub claim
 echo "<jwt-token>" | cut -d'.' -f2 | base64 -d | jq .
-
-# Should show:
-# {
-#   "sub": "alice@example.com",
-#   ...
-# }
 ```
 
 2. **Check policy.csv format:**
@@ -879,19 +895,6 @@ p, alice@example.com, prometheus-prod, ...  # Specific
 p, alice@example.com, *, ...                # Wildcard
 ```
 
-4. **Test authorization manually:**
-
-```bash
-# Enable debug logging (if implemented)
-go run . --iptables=false --policy-path=./cmd/dsproxy/authz
-
-# Check logs for authorization decisions:
-# [authz] checking policy: p=[alice@example.com prometheus-prod cluster1/monitoring read]
-# [authz] subject match: true
-# [authz] datasource match: true
-# [authz] allowing resource cluster1/monitoring for subject alice@example.com
-```
-
 **Common Issues:**
 
 - **Subject mismatch**: JWT `sub` claim doesn't match policy subject
@@ -906,25 +909,15 @@ go run . --iptables=false --policy-path=./cmd/dsproxy/authz
 
 **Symptom**: Queries return data from all namespaces instead of tenant-specific data
 
-**Check logs:**
-
-```text
-Warning: Multiple namespaces authorized, using first: namespace1
-```
-
 **Debugging:**
 
 ```bash
 # Verify policy.csv is loaded
 ls -la /etc/dsproxy/policy/policy.csv
 
-# Check if namespace is being extracted
-# Look for logs: [authz] allowing resource cluster1/test-namespace for subject ...
-
-# Test with verbose logging
-curl -v -H "Authorization: Bearer <jwt>" \
-     -H "X-Datasource-Uid: prometheus-prod" \
-     http://localhost:5533/api/v1/query?query=up
+# Look for logs:
+# [authz] allowing resource cluster1/test-namespace for subject ...
+# [label-injection] Injecting namespace regex: test-namespace
 ```
 
 **Solution:**
@@ -952,9 +945,8 @@ cat /etc/dsproxy/policy/model.conf
 
 **Common Issues:**
 
-- **Wrong matcher function**: Must use `keyMatch2` for wildcard patterns, not `keyMatch`
-- **Pattern syntax**: Use `*` for glob, not regex (e.g., `dev-*`, not `dev-.*`)
-- **Order matters**: More specific rules should come before general rules in policy.csv
+- **Pattern syntax**: Use `*` for glob, not regex (e.g., `dev-*`, not `dev-.*`). The glob is translated to a regex (`dev-.*`) for PromQL injection.
+- **Order matters**: More specific rules should come before general rules in policy.csv (both are applied; all matching policies contribute authorized namespaces)
 
 **Testing wildcards:**
 
@@ -986,20 +978,16 @@ p, admin, *, */*, read             # Matches everything
 **Check:**
 
 ```bash
-# Verify file watcher is monitoring policy directory
-# Look for logs: [authz] reloading policy from /etc/dsproxy/policy/policy.csv
-
-# Check file permissions
-ls -la /etc/dsproxy/policy/policy.csv
-
-# Verify file is being modified (not replaced)
-# Some editors create new files instead of modifying, breaking inotify
+# Look for logs:
+# [authz] watching policy directory: /etc/dsproxy/policy
+# [authz] detected change in policy.csv, scheduling reload...
+# [authz] policy and model reloaded
 ```
 
 **Solution:**
 
-- Restart DSProxy to force policy reload
-- Ensure policy file is writable and in correct location
+- Ensure the policy directory is writable and contains `policy.csv` and `model.conf`
+- The watcher watches the **directory**, so both in-place edits and atomic file replacement (rename) are detected
 - Check that policy directory path matches `--policy-path` flag
 
 ## Development
@@ -1007,8 +995,8 @@ ls -la /etc/dsproxy/policy/policy.csv
 ### Building from Source
 
 ```bash
-# Build the binary
-go build -o dsproxy ./cmd/dsproxy
+# Build the binary (requires the UI build output, see below)
+go build -o bin/dsproxy ./cmd/dsproxy
 
 # Run tests
 go test -v ./cmd/dsproxy/...
@@ -1016,6 +1004,24 @@ go test -v ./cmd/dsproxy/...
 # Run with coverage
 go test -coverprofile=coverage.out ./cmd/dsproxy/...
 go tool cover -html=coverage.out
+```
+
+### Building the UI and Container Image
+
+The web UI is built with Vite and embedded into the binary via `go:embed`. The production build (`cmd/dsproxy/ui/dist`) is committed to the repository so the Go package compiles on a clean checkout, and can be regenerated with:
+
+```bash
+# Build the UI assets
+make build-ui
+
+# Build the dsproxy binary with the embedded UI
+make build-dsproxy
+
+# Build the container image (UBI9, includes iptables)
+make docker-build-dsproxy
+
+# Push the container image
+make docker-push-dsproxy
 ```
 
 ### Customizing Label Extraction
@@ -1026,13 +1032,15 @@ The `contextLabelExtractor` in `handlers.go` implements the `injectproxy.Extract
 // Example: Extract multiple labels from JWT
 type multiLabelExtractor struct{}
 
-func (e *multiLabelExtractor) ExtractLabel(r *http.Request) (string, string, error) {
-    namespace := r.Context().Value("namespace").(string)
-    team := r.Context().Value("team").(string)
-    
-    // Return label name and value
-    // You can inject multiple labels by chaining proxies
-    return "namespace", namespace, nil
+func (e *multiLabelExtractor) ExtractLabel(next http.HandlerFunc) http.Handler {
+    return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+        namespace := r.Context().Value("namespace").(string)
+        team := r.Context().Value("team").(string)
+
+        // Return label name and value
+        // You can inject multiple labels by chaining proxies
+        return
+    })
 }
 ```
 
@@ -1041,8 +1049,8 @@ func (e *multiLabelExtractor) ExtractLabel(r *http.Request) (string, string, err
 Currently supports OpenShift OAuth. To integrate with other OIDC providers:
 
 1. Update `--jwks-url` to point to provider's discovery endpoint
-2. Adjust audience claim validation in `authMiddleware()`
-3. Ensure JWT includes `namespace` claim (or customize `contextLabelExtractor` to extract from different claim)
+2. Adjust audience claim validation via `--jwt-audience` (and optionally `--jwt-issuer`)
+3. Ensure JWT includes `sub` and `exp` claims (or customize `contextLabelExtractor` to extract from a different claim)
 
 ## References
 

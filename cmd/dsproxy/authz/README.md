@@ -13,7 +13,7 @@ DSProxy uses a three-stage authorization process:
 
 1. **JWT Authentication**: Extracts the `sub` (subject) claim from the JWT token as the user identity
 2. **Casbin Authorization**: Checks `policy.csv` to find which cluster/namespace pairs the user can access
-3. **Label Injection**: Uses prom-label-proxy to inject the authorized namespace into PromQL queries
+3. **Label Injection**: Uses prom-label-proxy to inject the authorized namespace(s) into PromQL queries as regex matchers
 
 ## Policy Format
 
@@ -27,11 +27,12 @@ p, subject, datasource, cluster/namespace, action
 
 - **subject**: User identifier from JWT `sub` claim or group name
   - Example: `alice@example.com`, `team-backend`, `developers`
-  
+
 - **datasource**: Datasource ID from `X-Datasource-Uid` header
   - Use `*` to match any datasource
+  - Supports `keyMatch2` patterns (e.g., `prometheus-*`)
   - Example: `prometheus-prod`, `datasource1`, `*`
-  
+
 - **cluster/namespace**: Resource in format `cluster/namespace`
   - Supports wildcards using `keyMatch2` pattern matching
   - Examples:
@@ -39,10 +40,9 @@ p, subject, datasource, cluster/namespace, action
     - `*/dev-*` - Any cluster, namespace starting with "dev-"
     - `prod-cluster/*` - All namespaces in prod-cluster
     - `*/*` - All resources (admin access)
-  
+
 - **action**: Operation type
   - Currently: `read`
-  - Future: `write`, `delete`, etc.
 
 ## Role Inheritance
 
@@ -99,6 +99,19 @@ p, team-backend, *, prod-cluster/backend-*, read
 # Matches: backend-api, backend-worker, backend-cache, etc.
 ```
 
+## Label Injection Translation
+
+After authorization, the namespace part of each authorized resource is translated into a PromQL regex matcher (the proxy runs prom-label-proxy in regex match mode):
+
+| Policy object | Injected matcher | Matches |
+|---|---|---|
+| `cluster1/namespace3` | `namespace=~"namespace3"` | exact (regex is fully anchored) |
+| `*/dev-*` | `namespace=~"dev-.*"` | namespaces starting with `dev-` |
+| `prod-cluster/*` | `namespace=~".+"` | any non-empty namespace value |
+| `*/*` | `namespace=~".+"` | any non-empty namespace value |
+
+Multiple authorized namespaces are combined into a single regex union, e.g. `namespace=~"monitoring|alerting"`. The union is sorted and deduplicated, so it is deterministic across requests.
+
 ## Common Use Cases
 
 ### Team-Based Access
@@ -139,7 +152,11 @@ p, alice@example.com, prometheus-prod, cluster1/alerting, read
 p, alice@example.com, prometheus-prod, cluster1/logging, read
 ```
 
-When querying, DSProxy will inject the first authorized namespace. In the future, this will support regex patterns like `namespace=~"monitoring|alerting|logging"`.
+When querying, DSProxy injects **all** authorized namespaces as a regex union:
+
+```promql
+up{namespace=~"alerting|logging|monitoring"}
+```
 
 ### Admin Access
 
@@ -150,6 +167,8 @@ p, system:cluster-admin, *, */*, read
 # Assign admin role
 g, admin@example.com, system:cluster-admin
 ```
+
+Admin queries are injected with `namespace=~".+"` (any non-empty namespace).
 
 ## Testing Authorization
 
@@ -172,18 +191,18 @@ You can test authorization policies by:
 p, team-backend, prometheus-prod, prod-cluster/backend-*, read
 
 # Result: Query transformed to:
-up{job="api",namespace="backend-api"}
+up{job="api",namespace=~"backend-.*"}
 ```
 
 ## Hot-Reload
 
-DSProxy watches both `model.conf` and `policy.csv` for changes and automatically reloads policies when files are modified. No restart required!
+DSProxy watches the policy **directory** for changes and automatically reloads when `model.conf` or `policy.csv` is modified (including atomic file replacement). No restart required!
 
 Log output on reload:
 
 ```
-[authz] detected policy or model change, reloading...
-[authz] policy reloaded
+[authz] detected change in policy.csv, scheduling reload...
+[authz] policy and model reloaded
 ```
 
 ## Troubleshooting
@@ -203,6 +222,7 @@ Enable debug logging to see authorization decisions:
 ```
 [authz] allowing resource cluster1/namespace3 for subject alice@example.com
 [authz] allowed cluster/namespace pairs: [[cluster1 namespace3]]
+[authz] Injecting namespace regex: namespace3
 ```
 
 ### Policy Not Loading

@@ -331,6 +331,7 @@ var (
 	f_policyPath     string
 	f_upstreamURL    string
 	f_injectionLabel string
+	f_clusterLabel   string
 	f_jwtAudience    string
 	f_caBundle       string
 	f_uiPort         int
@@ -371,7 +372,11 @@ func init() {
 
 	flag.StringVar(&f_injectionLabel, "injection-label",
 		getenvOrDefault("DSPROXY_INJECTION_LABEL", "namespace"),
-		"Label name to inject for multi-tenancy (e.g., namespace, tenant)")
+		"Label name to inject for namespace multi-tenancy (e.g., namespace, k8s_namespace)")
+
+	flag.StringVar(&f_clusterLabel, "cluster-label",
+		getenvOrDefault("DSPROXY_CLUSTER_LABEL", "cluster"),
+		"Label name to inject for cluster multi-tenancy (e.g., cluster, k8s_cluster; empty disables cluster injection)")
 
 	flag.StringVar(&f_jwtAudience, "jwt-audience",
 		getenvOrDefault("DSPROXY_JWT_AUDIENCE", "example-app"),
@@ -575,11 +580,11 @@ func main() {
 	}
 
 	// Create Prometheus proxy with label injection
-	promProxy, err := newPrometheusProxy(f_upstreamURL, f_injectionLabel)
+	promProxy, _, err := newPrometheusProxy(f_upstreamURL, f_injectionLabel, f_clusterLabel)
 	if err != nil {
 		log.Fatalf("Failed to create Prometheus proxy: %v", err)
 	}
-	log.Printf("Prometheus proxy created: upstream=%s, label=%s", f_upstreamURL, f_injectionLabel)
+	log.Printf("Prometheus proxy created: upstream=%s, labels=%s/%s", f_upstreamURL, f_clusterLabel, f_injectionLabel)
 
 	httpServer, httpsServer := startServers(authzService, promProxy, f_tlsCert, f_tlsKey)
 	uiServer := startUIServer(fmt.Sprintf("127.0.0.1:%d", f_uiPort), authzService)

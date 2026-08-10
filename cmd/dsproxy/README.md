@@ -9,7 +9,7 @@ DSProxy runs as a sidecar container alongside Grafana or other applications that
 - **Transparent Traffic Interception**: Uses iptables NAT rules to redirect outbound Prometheus traffic
 - **JWT Authentication**: Validates bearer tokens using JWKS from OpenShift OAuth (extracts `sub` claim)
 - **Casbin Authorization**: Policy-based access control determining which cluster/namespace pairs users can access
-- **Automatic Label Injection**: Injects authorized namespace labels into all PromQL queries via prom-label-proxy
+- **Automatic Label Injection**: Injects authorized cluster and namespace labels into all PromQL queries via prom-label-proxy
 - **Multi-Tenancy Enforcement**: Ensures users only see metrics from namespaces allowed by policy.csv
 - **Prometheus API Support**: Handles `/api/v1/query`, `/api/v1/query_range`, `/api/v1/series`, `/api/v1/labels`, and more
 - **Dynamic Configuration**: Hot-reload of iptables rules, authorization policies, and the Casbin model
@@ -53,8 +53,10 @@ DSProxy runs as a sidecar container alongside Grafana or other applications that
 │  │ prom-label-proxy │   │
 │  │  - Parse PromQL  │   │
 │  │  - Inject Labels │   │
-│  │    {namespace=~  │   │
-│  │     "tenant-a"}  │   │
+│  │    {cluster=~    │   │
+│  │     "tenant-a",  │   │
+│  │     namespace=~  │   │
+│  │     "team-a"}    │   │
 │  └────────┬─────────┘   │
 │           │             │
 │  ┌────────▼─────────┐   │
@@ -62,7 +64,7 @@ DSProxy runs as a sidecar container alongside Grafana or other applications that
 │  │  - Forward Req   │   │
 │  └──────────────────┘   │
 └──────┬──────────────────┘
-       │ PromQL: up{instance="localhost:9090",namespace=~"tenant-a"}
+       │ PromQL: up{instance="localhost:9090",cluster=~"tenant-a",namespace=~"team-a"}
        ↓
 ┌─────────────────────────┐
 │   Prometheus Server     │
@@ -77,7 +79,7 @@ DSProxy enforces multi-tenancy through a pipeline:
 
 1. **JWT Authentication**: Validates the token signature, expiration, and audience; extracts the `sub` (subject) claim as the user identity
 2. **Casbin Authorization**: Queries `policy.csv` to determine which cluster/namespace pairs the user can access
-3. **Label Injection**: Uses prom-label-proxy to inject the authorized namespace(s) into PromQL queries as a **regex matcher**
+3. **Label Injection**: Uses prom-label-proxy to inject the authorized cluster and namespace into PromQL queries as **regex matchers**
 
 **Example Transformation:**
 
@@ -92,12 +94,12 @@ up{instance="localhost:9090"}
 After authorization and label injection:
 
 ```promql
-up{instance="localhost:9090",namespace=~"namespace3"}
+up{instance="localhost:9090",cluster=~"cluster1",namespace=~"namespace3"}
 ```
 
 Prometheus regex matchers are fully anchored, so `namespace=~"namespace3"` behaves exactly like `namespace="namespace3"`.
 
-This ensures users can **only see metrics** from namespaces authorized in `policy.csv`, providing true multi-tenancy through both authorization and query enforcement.
+This ensures users can **only see metrics** from the cluster/namespace pairs authorized in `policy.csv`, providing true multi-tenancy through both authorization and query enforcement.
 
 ## Components
 
@@ -153,14 +155,15 @@ Uses [Casbin](https://casbin.org) for policy-based access control:
 
 ### 4. Label Injection (`handlers.go` + `prom-label-proxy`)
 
-DSProxy integrates [prom-label-proxy](https://github.com/prometheus-community/prom-label-proxy) in **regex match mode** to automatically inject authorized namespace labels into PromQL queries:
+DSProxy integrates [prom-label-proxy](https://github.com/prometheus-community/prom-label-proxy) in **regex match mode** to automatically inject the authorized cluster and namespace labels into PromQL queries:
 
-- **Custom Label Extractor**: Reads authorized namespaces from the Casbin authorization context
+- **Custom Label Extractors**: One extractor per enforced label reads the authorized cluster/namespace pairs from the Casbin authorization context
+- **Dual-Label Enforcement**: Two chained prom-label-proxy instances enforce the cluster label (`--cluster-label`, default `cluster`) and the namespace label (`--injection-label`, default `namespace`). Setting `--cluster-label=` disables cluster injection (namespace-only mode).
 - **Wildcard Translation**: Casbin glob patterns are translated to PromQL regex:
   - `dev-*` → `dev-.*`
   - `backend-?` → `backend-.`
   - `*` (from `cluster/*` or `*/*`) → `.+`
-- **Multi-Namespace Support**: All authorized namespaces are combined into a single regex union, e.g. `namespace=~"monitoring|alerting"`. The result is deterministic (sorted, deduplicated) across requests.
+- **Multi-Resource Support**: All authorized pairs contribute to the injected regexes - cluster regexes and namespace regexes are combined into deterministic (sorted, deduplicated) unions, e.g. `cluster=~"cluster1|cluster2"` and `namespace=~"monitoring|alerting"`
 - **Endpoints**:
   - `/api/v1/query` - Instant queries
   - `/api/v1/query_range` - Range queries
@@ -169,7 +172,7 @@ DSProxy integrates [prom-label-proxy](https://github.com/prometheus-community/pr
   - `/api/v1/label/<name>/values` - Label values
   - `/api/v1/query_exemplars` - Exemplars
   - `/federate` - Federated data
-  - `/api/v1/alerts` and `/api/v1/rules` - Filtered by tenant label
+  - `/api/v1/alerts` and `/api/v1/rules` - Filtered by tenant labels
 
 ### 5. Proxy Handler
 
@@ -193,7 +196,8 @@ DSProxy integrates [prom-label-proxy](https://github.com/prometheus-community/pr
 | `--ca-bundle` | `DSPROXY_CA_BUNDLE` | *(empty)* | Path to CA bundle for verifying JWKS and upstream certificates |
 | `--policy-path` | `DSPROXY_POLICY_PATH` | `/etc/dsproxy/policy` | Directory containing Casbin policy files |
 | `--upstream-url` | `DSPROXY_UPSTREAM_URL` | `http://localhost:9090` | Upstream Prometheus server URL |
-| `--injection-label` | `DSPROXY_INJECTION_LABEL` | `namespace` | Label name to inject for multi-tenancy |
+| `--injection-label` | `DSPROXY_INJECTION_LABEL` | `namespace` | Label name to inject for namespace multi-tenancy (e.g., `namespace`, `k8s_namespace`) |
+| `--cluster-label` | `DSPROXY_CLUSTER_LABEL` | `cluster` | Label name to inject for cluster multi-tenancy (e.g., `cluster`, `k8s_cluster`; empty disables cluster injection) |
 | `--ui-port` | `DSPROXY_UI_PORT` | `3001` | Port to serve the web UI (bound to 127.0.0.1) |
 
 ### Proxy Configuration (`dsproxy.yaml`)
@@ -260,10 +264,10 @@ rate(http_requests_total[5m])
 
 **Query Sent to Prometheus:**
 ```promql
-rate(http_requests_total{namespace=~"monitoring"}[5m])
+rate(http_requests_total{cluster=~"cluster1",namespace=~"monitoring"}[5m])
 ```
 
-**Effect:** Alice can only see HTTP request rates from the `monitoring` namespace.
+**Effect:** Alice can only see HTTP request rates from the `monitoring` namespace in `cluster1`.
 
 ---
 
@@ -281,10 +285,10 @@ up{job="api-server"}
 
 **Query Sent to Prometheus:**
 ```promql
-up{job="api-server",namespace=~"dev-.*"}
+up{job="api-server",cluster=~"cluster1",namespace=~"dev-.*"}
 ```
 
-**Effect:** Bob can see all services in namespaces matching `dev-*` pattern (e.g., `dev-team-a`, `dev-team-b`).
+**Effect:** Bob can see all services in namespaces matching `dev-*` pattern (e.g., `dev-team-a`, `dev-team-b`) in `cluster1`.
 
 ---
 
@@ -302,10 +306,10 @@ container_memory_usage_bytes
 
 **Query Sent to Prometheus:**
 ```promql
-container_memory_usage_bytes{namespace=~".+"}
+container_memory_usage_bytes{cluster=~".+",namespace=~".+"}
 ```
 
-**Effect:** Cluster admin sees metrics from all namespaces (the regex matches any non-empty namespace value).
+**Effect:** Cluster admin sees metrics from all clusters and namespaces (the regexes match any non-empty label value).
 
 ---
 
@@ -329,10 +333,10 @@ sum(rate(database_queries_total[1m])) by (pod)
 
 **Query Sent to Prometheus:**
 ```promql
-sum(rate(database_queries_total{namespace=~"backend-prod|backend-staging"}[1m])) by (pod)
+sum(rate(database_queries_total{cluster=~"cluster1",namespace=~"backend-prod|backend-staging"}[1m])) by (pod)
 ```
 
-**Effect:** Alice (as member of `team-backend`) can query metrics from **both** `backend-prod` and `backend-staging` namespaces. All authorized namespaces are injected as a regex union.
+**Effect:** Alice (as member of `team-backend`) can query metrics from **both** `backend-prod` and `backend-staging` namespaces in `cluster1`. All authorized namespaces are injected as a regex union.
 
 ---
 
@@ -353,12 +357,12 @@ g, eve@example.com, developers
 
 **Query Sent to Prometheus (David/QA):**
 ```promql
-node_cpu_seconds_total{namespace=~"qa-.*"}
+node_cpu_seconds_total{cluster=~".+",namespace=~"qa-.*"}
 ```
 
 **Query Sent to Prometheus (Eve/Developers):**
 ```promql
-node_cpu_seconds_total{namespace=~"dev-.*"}
+node_cpu_seconds_total{cluster=~".+",namespace=~"dev-.*"}
 ```
 
 **Effect:** Each team sees only their environment-specific metrics.
@@ -378,17 +382,17 @@ p, alice@example.com, prometheus-dev, cluster1/*, read
 
 **Query Sent to Prometheus:**
 ```promql
-up{namespace=~"monitoring"}
+up{cluster=~"cluster1",namespace=~"monitoring"}
 ```
 
 **Request with Header:** `X-Datasource-Uid: prometheus-dev`
 
 **Query Sent to Prometheus:**
 ```promql
-up{namespace=~".+"}
+up{cluster=~"cluster1",namespace=~".+"}
 ```
 
-**Effect:** Alice has restricted access to `prometheus-prod` (monitoring namespace only) but full access to `prometheus-dev` (all namespaces). Note that DSProxy serves a **single upstream** configured via `--upstream-url`; datasource IDs select authorization policies, not different upstreams.
+**Effect:** Alice has restricted access to `prometheus-prod` (monitoring namespace in cluster1 only) but full access to `prometheus-dev` (all namespaces in cluster1). Note that DSProxy serves a **single upstream** configured via `--upstream-url`; datasource IDs select authorization policies, not different upstreams.
 
 ---
 
@@ -405,20 +409,21 @@ p, alice@example.com, prometheus-prod, cluster1/monitoring, read
 up{namespace="database"}
 ```
 
-**Response:** `200 OK` with the injected matcher ANDed with the user's matcher:
+**Response:** `200 OK` with the injected matchers ANDed with the user's matcher:
 ```promql
-up{namespace="database",namespace=~"monitoring"}
+up{cluster=~"cluster1",namespace="database",namespace=~"monitoring"}
 ```
 
-**Effect:** No series can satisfy both matchers, so the user gets an empty result. The conflicting user matcher is preserved (regex match mode), which means the query is not rejected, but it also cannot leak data from `database`. If the user has **no** authorized resources at all, the response is `403 Forbidden`.
+**Effect:** No series can satisfy all matchers, so the user gets an empty result. The conflicting user matcher is preserved (regex match mode), which means the query is not rejected, but it also cannot leak data from `database`. If the user has **no** authorized resources at all, the response is `403 Forbidden`.
 
 ### Important Notes
 
-1. **Regex Injection**: All authorized namespaces are injected as a single regex matcher (`namespace=~"ns1|ns2"`). Prometheus regex matchers are fully anchored.
+1. **Regex Injection**: All authorized cluster and namespace values are injected as single regex matchers (`cluster=~"cluster1|cluster2"`, `namespace=~"ns1|ns2"`). Prometheus regex matchers are fully anchored.
 2. **Wildcard Translation**: Casbin glob patterns are translated: `*` → `.*`, `?` → `.`, and a bare `*` (admin) → `.+`.
-3. **Deterministic Ordering**: Authorized namespaces are sorted and deduplicated before injection, so the injected regex is stable across requests.
-4. **Header Required**: The `X-Datasource-Uid` header must be present for datasource-specific policies. If missing, wildcard datasource (`*`) policies apply.
-5. **Grafana Integration**: When configuring Grafana datasources, set **Custom HTTP Headers** to include `X-Datasource-Uid` with the datasource identifier matching `policy.csv`.
+3. **Deterministic Ordering**: Authorized cluster and namespace regexes are sorted and deduplicated before injection, so the injected matchers are stable across requests.
+4. **Label Names Configurable**: The injected label names are configurable via `--injection-label` (namespace) and `--cluster-label` (cluster) - e.g. `k8s_namespace` / `k8s_cluster`.
+5. **Header Required**: The `X-Datasource-Uid` header must be present for datasource-specific policies. If missing, wildcard datasource (`*`) policies apply.
+6. **Grafana Integration**: When configuring Grafana datasources, set **Custom HTTP Headers** to include `X-Datasource-Uid` with the datasource identifier matching `policy.csv`.
 
 For detailed authorization configuration, policy examples, and troubleshooting, see [authz/README.md](./authz/README.md).
 
@@ -512,7 +517,7 @@ The proxy will:
 1. Validate JWT and extract `sub` claim (e.g., `testuser@example.com`)
 2. Check Casbin authorization against `policy.csv` for datasource `prometheus-prod`
 3. Find matching policy: `testuser@example.com` → `cluster1/monitoring` → authorized
-4. Inject authorized namespace label `monitoring` into query via prom-label-proxy
+4. Inject authorized cluster and namespace labels into the query via prom-label-proxy
 
 Query transformation example:
 
@@ -521,7 +526,7 @@ Query transformation example:
 up{job="api"}
 
 # After authorization check, query sent to Prometheus
-up{job="api",namespace=~"monitoring"}
+up{cluster=~"cluster1",job="api",namespace=~"monitoring"}
 ```
 
 **Testing Different Scenarios:**
@@ -538,7 +543,7 @@ echo "p, admin@example.com, *, */*, read" >> ./cmd/dsproxy/authz/policy.csv
 curl -H "Authorization: Bearer <jwt-with-sub-admin>" \
      -H "X-Datasource-Uid: prometheus-prod" \
      http://localhost:5533/api/v1/query?query=up
-# Expected: 200 OK with namespace=~".+" injected
+# Expected: 200 OK with cluster=~".+" and namespace=~".+" injected
 
 # Test role inheritance
 echo "g, developer@example.com, team-backend" >> ./cmd/dsproxy/authz/policy.csv
@@ -546,7 +551,7 @@ echo "p, team-backend, *, cluster1/backend-prod, read" >> ./cmd/dsproxy/authz/po
 curl -H "Authorization: Bearer <jwt-with-sub-developer>" \
      -H "X-Datasource-Uid: prometheus-prod" \
      http://localhost:5533/api/v1/query?query=up
-# Expected: 200 OK with namespace=~"backend-prod" injected
+# Expected: 200 OK with cluster=~"cluster1" and namespace=~"backend-prod" injected
 ```
 
 ### Running in Kubernetes
@@ -619,12 +624,12 @@ spec:
    - Returns `403 Forbidden` if no matching policy found
 
 5. **prom-label-proxy** (`contextLabelExtractor` in `handlers.go`) transforms the PromQL query:
-   - Extracts authorized namespaces from context
-   - Translates glob patterns to regex and combines them into a single union (e.g., `monitoring|alerting`)
+   - Extracts authorized cluster/namespace pairs from context
+   - Translates glob patterns to regex and combines them into sorted unions (e.g., `cluster1|cluster2` and `monitoring|alerting`)
    - Parses the PromQL query AST
-   - Injects `{namespace=~"..."}` into all metric selectors
-   - Example: `up{job="api"}` → `up{job="api",namespace=~"monitoring"}`
-   - For wildcards: `up` → `up{namespace=~"dev-.*"}`
+   - Injects `{cluster=~"..."}` and `{namespace=~"..."}` into all metric selectors
+   - Example: `up{job="api"}` → `up{cluster=~"cluster1",job="api",namespace=~"monitoring"}`
+   - For wildcards: `up` → `up{cluster=~".+",namespace=~"dev-.*"}`
 
 6. **Proxy handler** forwards transformed request to upstream Prometheus:
    - Removes `Authorization` header (token not forwarded to Prometheus)
@@ -632,9 +637,9 @@ spec:
    - Streams response back to Grafana
 
 **Multi-Tenancy Enforcement**: 
-- **Authorization Layer**: Casbin checks `policy.csv` to determine allowed namespaces
-- **Query Layer**: prom-label-proxy injects namespace labels at PromQL AST level
-- **Result**: Users can only query metrics from namespaces authorized in `policy.csv`. If a user manually specifies a conflicting namespace matcher, the injected matcher is ANDed with it, so the query can never return data from unauthorized namespaces.
+- **Authorization Layer**: Casbin checks `policy.csv` to determine allowed cluster/namespace pairs
+- **Query Layer**: prom-label-proxy injects cluster and namespace labels at PromQL AST level
+- **Result**: Users can only query metrics from the cluster/namespace pairs authorized in `policy.csv`. If a user manually specifies a conflicting label matcher, the injected matchers are ANDed with it, so the query can never return data from unauthorized resources.
 
 ## Security Considerations
 
@@ -684,8 +689,8 @@ The bundle is used for both JWKS and upstream connections.
 **How It Works:**
 
 - Queries are parsed into Abstract Syntax Tree (AST)
-- The authorized namespace regex matcher is injected into every metric selector
-- User-supplied namespace matchers are preserved and ANDed with the injected matcher, so conflicting matchers can never leak data
+- The authorized cluster and namespace regex matchers are injected into every metric selector
+- User-supplied label matchers are preserved and ANDed with the injected matchers, so conflicting matchers can never leak data
 
 **Example:**
 
@@ -693,10 +698,10 @@ The bundle is used for both JWKS and upstream connections.
 # User sends query (attempting to access another namespace)
 up{namespace="unauthorized-namespace"}
 
-# After authorization (user authorized for "monitoring")
-up{namespace="unauthorized-namespace",namespace=~"monitoring"}
+# After authorization (user authorized for cluster1/monitoring)
+up{cluster=~"cluster1",namespace="unauthorized-namespace",namespace=~"monitoring"}
 
-# No series matches both matchers -> empty result, no data leak
+# No series matches all matchers -> empty result, no data leak
 ```
 
 ### Policy Management UI Security
@@ -710,9 +715,10 @@ Requires `CAP_NET_ADMIN` capability to manipulate iptables rules. The process al
 ## Limitations
 
 - **Single Upstream**: DSProxy proxies to one upstream configured with `--upstream-url`. Datasource IDs (`X-Datasource-Uid`) select authorization policies, not different upstreams.
-- **Cluster Semantics**: Policies authorize `cluster/namespace` pairs, but the injected label is the namespace only. If the same namespace name exists in multiple clusters, the label alone cannot distinguish them. Point `--injection-label` at a cluster-scoped label (and adjust policies) if this is a concern.
+- **Labels Must Exist on Series**: The injected cluster and namespace labels must be present on the upstream metrics; series without those labels are not returned. Metrics must carry both labels for full multi-tenancy.
+- **Label Names**: The enforced label names are fixed per deployment (`--cluster-label` and `--injection-label`). If your metrics use different names (e.g. `k8s_cluster`), configure the flags accordingly - do not mix label names.
 - **Alertmanager Silences**: In regex match mode, the Alertmanager silences API returns `501 Not implemented` (prom-label-proxy limitation). This proxy targets Prometheus query APIs.
-- **Admin Wildcard**: `*/*` injects `namespace=~".+"` which matches any non-empty namespace value. Series without the injected label are not returned.
+- **Admin Wildcard**: `*/*` injects `cluster=~".+"` and `namespace=~".+"` which match any non-empty label value.
 
 ## Testing
 
@@ -774,14 +780,14 @@ curl -H "Authorization: Bearer <jwt-with-sub-testuser>" \
      -H "X-Datasource-Uid: prometheus-prod" \
      http://127.0.0.1:5533/api/v1/query?query=up{job="api"}
 # Expected: 200 OK
-# Query transformed: up{job="api",namespace=~"test-namespace"}
+# Query transformed: up{cluster=~"cluster1",job="api",namespace=~"test-namespace"}
 
 # Test 2: Admin with wildcard access
 curl -H "Authorization: Bearer <jwt-with-sub-admin>" \
      -H "X-Datasource-Uid: prometheus-prod" \
      http://127.0.0.1:5533/api/v1/query?query=up
 # Expected: 200 OK
-# Query transformed: up{namespace=~".+"}
+# Query transformed: up{cluster=~".+",namespace=~".+"}
 
 # Test 3: Unauthorized datasource
 curl -H "Authorization: Bearer <jwt-with-sub-testuser>" \
@@ -792,7 +798,7 @@ curl -H "Authorization: Bearer <jwt-with-sub-testuser>" \
 
 **Expected Behavior:**
 
-- Valid JWT with policy match: Query executes with injected namespace regex
+- Valid JWT with policy match: Query executes with injected cluster and namespace regexes
 - Valid JWT but no matching policy: `403 Forbidden` with authorization error
 - Missing or invalid JWT: `401 Unauthorized`
 - Missing `X-Datasource-Uid` header: Uses wildcard datasource (`*`) from policy

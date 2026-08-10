@@ -101,16 +101,19 @@ p, team-backend, *, prod-cluster/backend-*, read
 
 ## Label Injection Translation
 
-After authorization, the namespace part of each authorized resource is translated into a PromQL regex matcher (the proxy runs prom-label-proxy in regex match mode):
+After authorization, each authorized cluster/namespace pair is translated into PromQL regex matchers for **both** the cluster label and the namespace label (the proxy runs prom-label-proxy in regex match mode with two chained instances):
 
-| Policy object | Injected matcher | Matches |
-|---|---|---|
-| `cluster1/namespace3` | `namespace=~"namespace3"` | exact (regex is fully anchored) |
-| `*/dev-*` | `namespace=~"dev-.*"` | namespaces starting with `dev-` |
-| `prod-cluster/*` | `namespace=~".+"` | any non-empty namespace value |
-| `*/*` | `namespace=~".+"` | any non-empty namespace value |
+| Policy object | Injected cluster matcher | Injected namespace matcher | Matches |
+|---|---|---|---|
+| `cluster1/namespace3` | `cluster=~"cluster1"` | `namespace=~"namespace3"` | exact (regex is fully anchored) |
+| `cluster1/dev-*` | `cluster=~"cluster1"` | `namespace=~"dev-.*"` | namespace starting with `dev-` in cluster1 |
+| `*/dev-*` | `cluster=~".+"` | `namespace=~"dev-.*"` | any cluster, namespace starting with `dev-` |
+| `prod-cluster/*` | `cluster=~"prod-cluster"` | `namespace=~".+"` | any non-empty namespace in prod-cluster |
+| `*/*` | `cluster=~".+"` | `namespace=~".+"` | any non-empty cluster and namespace |
 
-Multiple authorized namespaces are combined into a single regex union, e.g. `namespace=~"monitoring|alerting"`. The union is sorted and deduplicated, so it is deterministic across requests.
+Multiple authorized pairs are combined into deterministic (sorted, deduplicated) regex unions per label, e.g. `cluster=~"cluster1|cluster2"` and `namespace=~"monitoring|alerting"`.
+
+The label names themselves are configurable via `--cluster-label` (default `cluster`) and `--injection-label` (default `namespace`); set them to match the labels your metrics actually carry (e.g. `k8s_cluster`, `k8s_namespace`).
 
 ## Common Use Cases
 
@@ -152,10 +155,10 @@ p, alice@example.com, prometheus-prod, cluster1/alerting, read
 p, alice@example.com, prometheus-prod, cluster1/logging, read
 ```
 
-When querying, DSProxy injects **all** authorized namespaces as a regex union:
+When querying, DSProxy injects **all** authorized namespaces as a regex union (plus the cluster label):
 
 ```promql
-up{namespace=~"alerting|logging|monitoring"}
+up{cluster=~"cluster1",namespace=~"alerting|logging|monitoring"}
 ```
 
 ### Admin Access
@@ -168,7 +171,7 @@ p, system:cluster-admin, *, */*, read
 g, admin@example.com, system:cluster-admin
 ```
 
-Admin queries are injected with `namespace=~".+"` (any non-empty namespace).
+Admin queries are injected with `cluster=~".+"` and `namespace=~".+"` (any non-empty values).
 
 ## Testing Authorization
 
@@ -191,7 +194,7 @@ You can test authorization policies by:
 p, team-backend, prometheus-prod, prod-cluster/backend-*, read
 
 # Result: Query transformed to:
-up{job="api",namespace=~"backend-.*"}
+up{cluster=~"prod-cluster",job="api",namespace=~"backend-.*"}
 ```
 
 ## Hot-Reload
@@ -222,7 +225,8 @@ Enable debug logging to see authorization decisions:
 ```
 [authz] allowing resource cluster1/namespace3 for subject alice@example.com
 [authz] allowed cluster/namespace pairs: [[cluster1 namespace3]]
-[authz] Injecting namespace regex: namespace3
+[label-injection] Injecting cluster regex: cluster1
+[label-injection] Injecting namespace regex: namespace3
 ```
 
 ### Policy Not Loading

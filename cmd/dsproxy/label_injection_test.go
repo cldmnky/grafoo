@@ -50,14 +50,22 @@ func newUpstream(t *testing.T) (*httptest.Server, *[]string) {
 }
 
 // newProxyChain builds the authz middleware wrapping a prom-label-proxy
-// handler pointed at the given upstream.
+// handler pointed at the given upstream, using the default label names
+// (cluster + namespace).
 func newProxyChain(t *testing.T, policyCSV string, upstreamURL string) http.Handler {
+	return newProxyChainWithLabels(t, policyCSV, upstreamURL, "namespace", "cluster")
+}
+
+// newProxyChainWithLabels builds the authz middleware wrapping a
+// prom-label-proxy handler with explicit label names.
+func newProxyChainWithLabels(t *testing.T, policyCSV string, upstreamURL, namespaceLabel, clusterLabel string) http.Handler {
 	t.Helper()
 	authz := setupAuthz(t, policyCSV)
-	promProxy, err := newPrometheusProxy(upstreamURL, "namespace")
+	promProxy, cleanup, err := newPrometheusProxy(upstreamURL, namespaceLabel, clusterLabel)
 	if err != nil {
 		t.Fatalf("failed to create prometheus proxy: %v", err)
 	}
+	t.Cleanup(cleanup)
 	return authz.authzMiddleware("read")(promProxy)
 }
 
@@ -87,16 +95,17 @@ g, testuser, developers`
 	// Test 1: User with authorized namespace
 	w := requestWithContext(t, handler, "GET", "/api/v1/query?query=up", "testuser", "datasource1")
 	Expect(w.Code).To(Equal(http.StatusOK))
-	Expect((*received)[len(*received)-1]).To(Equal(`up{namespace=~"test-namespace"}`))
+	Expect((*received)[len(*received)-1]).To(Equal(`up{cluster=~"cluster1",namespace=~"test-namespace"}`))
 
 	// Test 2: User without authorization
 	w = requestWithContext(t, handler, "GET", "/api/v1/query?query=up", "unauthorized", "datasource1")
 	Expect(w.Code).To(Equal(http.StatusForbidden))
 
-	// Test 3: Admin with wildcard access
+	// Test 3: Admin with wildcard access. Prometheus sorts label matchers
+	// alphabetically, so the injected labels appear before "job".
 	w = requestWithContext(t, handler, "GET", `/api/v1/query?query=up{job="test"}`, "adminuser", "any-datasource")
 	Expect(w.Code).To(Equal(http.StatusOK))
-	Expect((*received)[len(*received)-1]).To(Equal(`up{job="test",namespace=~".+"}`))
+	Expect((*received)[len(*received)-1]).To(Equal(`up{cluster=~".+",job="test",namespace=~".+"}`))
 }
 
 // TestWildcardPolicyInjection verifies that keyMatch2-style patterns are
@@ -110,7 +119,7 @@ func TestWildcardPolicyInjection(t *testing.T) {
 		handler := newProxyChain(t, "p, bob, *, cluster1/dev-*, read", upstream.URL)
 		w := requestWithContext(t, handler, "GET", "/api/v1/query?query=up", "bob", "datasource1")
 		Expect(w.Code).To(Equal(http.StatusOK))
-		Expect((*received)[len(*received)-1]).To(Equal(`up{namespace=~"dev-.*"}`))
+		Expect((*received)[len(*received)-1]).To(Equal(`up{cluster=~"cluster1",namespace=~"dev-.*"}`))
 	})
 
 	t.Run("any cluster pattern", func(t *testing.T) {
@@ -119,7 +128,7 @@ func TestWildcardPolicyInjection(t *testing.T) {
 		handler := newProxyChain(t, "p, qa, *, */qa-*, read", upstream.URL)
 		w := requestWithContext(t, handler, "GET", "/api/v1/query?query=up", "qa", "datasource1")
 		Expect(w.Code).To(Equal(http.StatusOK))
-		Expect((*received)[len(*received)-1]).To(Equal(`up{namespace=~"qa-.*"}`))
+		Expect((*received)[len(*received)-1]).To(Equal(`up{cluster=~".+",namespace=~"qa-.*"}`))
 	})
 
 	t.Run("all namespaces in a cluster", func(t *testing.T) {
@@ -128,7 +137,7 @@ func TestWildcardPolicyInjection(t *testing.T) {
 		handler := newProxyChain(t, "p, sre, *, prod-cluster/*, read", upstream.URL)
 		w := requestWithContext(t, handler, "GET", "/api/v1/query?query=up", "sre", "datasource1")
 		Expect(w.Code).To(Equal(http.StatusOK))
-		Expect((*received)[len(*received)-1]).To(Equal(`up{namespace=~".+"}`))
+		Expect((*received)[len(*received)-1]).To(Equal(`up{cluster=~"prod-cluster",namespace=~".+"}`))
 	})
 }
 
@@ -146,12 +155,13 @@ p, multiuser, datasource1, cluster1/namespace2, read`
 	for i := 0; i < 5; i++ {
 		w := requestWithContext(t, handler, "GET", "/api/v1/query?query=up", "multiuser", "datasource1")
 		Expect(w.Code).To(Equal(http.StatusOK))
-		Expect((*received)[len(*received)-1]).To(Equal(`up{namespace=~"namespace1|namespace2|namespace3"}`))
+		Expect((*received)[len(*received)-1]).To(Equal(`up{cluster=~"cluster1",namespace=~"namespace1|namespace2|namespace3"}`))
 	}
 }
 
 // TestSameNamespaceDifferentClusters verifies that the same namespace name
-// authorized in multiple clusters is injected once.
+// authorized in multiple clusters is injected once while the cluster matcher
+// covers both clusters.
 func TestSameNamespaceDifferentClusters(t *testing.T) {
 	RegisterTestingT(t)
 	upstream, received := newUpstream(t)
@@ -160,7 +170,32 @@ p, user, datasource1, cluster2/shared-ns, read`
 	handler := newProxyChain(t, policy, upstream.URL)
 	w := requestWithContext(t, handler, "GET", "/api/v1/query?query=up", "user", "datasource1")
 	Expect(w.Code).To(Equal(http.StatusOK))
-	Expect((*received)[len(*received)-1]).To(Equal(`up{namespace=~"shared-ns"}`))
+	Expect((*received)[len(*received)-1]).To(Equal(`up{cluster=~"cluster1|cluster2",namespace=~"shared-ns"}`))
+}
+
+// TestCustomLabelNames verifies that the injected label names are
+// configurable (e.g. k8s_cluster / k8s_namespace instead of cluster /
+// namespace).
+func TestCustomLabelNames(t *testing.T) {
+	RegisterTestingT(t)
+	upstream, received := newUpstream(t)
+	handler := newProxyChainWithLabels(t, "p, alice, datasource1, cluster1/monitoring, read", upstream.URL, "k8s_namespace", "k8s_cluster")
+
+	w := requestWithContext(t, handler, "GET", "/api/v1/query?query=up", "alice", "datasource1")
+	Expect(w.Code).To(Equal(http.StatusOK))
+	Expect((*received)[len(*received)-1]).To(Equal(`up{k8s_cluster=~"cluster1",k8s_namespace=~"monitoring"}`))
+}
+
+// TestSingleLabelMode verifies that setting an empty cluster label disables
+// cluster injection (backwards compatible namespace-only behavior).
+func TestSingleLabelMode(t *testing.T) {
+	RegisterTestingT(t)
+	upstream, received := newUpstream(t)
+	handler := newProxyChainWithLabels(t, "p, alice, datasource1, cluster1/monitoring, read", upstream.URL, "namespace", "")
+
+	w := requestWithContext(t, handler, "GET", "/api/v1/query?query=up", "alice", "datasource1")
+	Expect(w.Code).To(Equal(http.StatusOK))
+	Expect((*received)[len(*received)-1]).To(Equal(`up{namespace=~"monitoring"}`))
 }
 
 // TestUserNamespaceMatcherIsOverridden verifies that a user cannot escape
@@ -178,6 +213,7 @@ func TestUserNamespaceMatcherIsOverridden(t *testing.T) {
 	w := requestWithContext(t, handler, "GET", `/api/v1/query?query=up{namespace="database"}`, "alice", "datasource1")
 	Expect(w.Code).To(Equal(http.StatusOK))
 	forwarded := (*received)[len(*received)-1]
+	Expect(forwarded).To(ContainSubstring(`cluster=~"cluster1"`))
 	Expect(forwarded).To(ContainSubstring(`namespace=~"monitoring"`))
 	// The conflicting user matcher is preserved: namespace="database" AND
 	// namespace=~"monitoring" can never match a series.
@@ -193,7 +229,7 @@ func TestSeriesMatcherInjection(t *testing.T) {
 
 	w := requestWithContext(t, handler, "GET", `/api/v1/series?match[]={job="api"}`, "alice", "datasource1")
 	Expect(w.Code).To(Equal(http.StatusOK))
-	Expect((*received)[len(*received)-1]).To(Equal(`{job="api",namespace=~"monitoring"}`))
+	Expect((*received)[len(*received)-1]).To(Equal(`{job="api",cluster=~"cluster1",namespace=~"monitoring"}`))
 }
 
 // TestLabelsAPIEnabled verifies that the label metadata endpoints are
@@ -205,59 +241,121 @@ func TestLabelsAPIEnabled(t *testing.T) {
 
 	w := requestWithContext(t, handler, "GET", `/api/v1/labels?match[]={job="api"}`, "alice", "datasource1")
 	Expect(w.Code).To(Equal(http.StatusOK))
-	Expect((*received)[len(*received)-1]).To(Equal(`{job="api",namespace=~"monitoring"}`))
+	Expect((*received)[len(*received)-1]).To(Equal(`{job="api",cluster=~"cluster1",namespace=~"monitoring"}`))
 
 	w = requestWithContext(t, handler, "GET", `/api/v1/label/job/values?match[]={job="api"}`, "alice", "datasource1")
 	Expect(w.Code).To(Equal(http.StatusOK))
-	Expect((*received)[len(*received)-1]).To(Equal(`{job="api",namespace=~"monitoring"}`))
+	Expect((*received)[len(*received)-1]).To(Equal(`{job="api",cluster=~"cluster1",namespace=~"monitoring"}`))
 }
 
-// TestContextLabelExtractor tests the label extraction logic
+// TestContextLabelExtractor tests the label extraction logic for both the
+// namespace and the cluster part.
 func TestContextLabelExtractor(t *testing.T) {
 	RegisterTestingT(t)
 
-	extractor := &contextLabelExtractor{
+	namespaceExtractor := &contextLabelExtractor{
 		label: "namespace",
+		part:  partNamespace,
+	}
+	clusterExtractor := &contextLabelExtractor{
+		label: "cluster",
+		part:  partCluster,
 	}
 
-	// Create a test handler that will be wrapped
-	nextCalled := false
-	var extractedValues []string
-	nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		nextCalled = true
-		extractedValues = injectproxy.MustLabelValues(r.Context())
-		w.WriteHeader(http.StatusOK)
-	})
+	allowedPairs := [][2]string{
+		{"cluster1", "namespace2"},
+		{"cluster1", "dev-*"},
+		{"cluster2", "namespace1"},
+	}
 
-	handler := extractor.ExtractLabel(nextHandler)
+	newTestHandler := func() (http.HandlerFunc, *[]string) {
+		var extracted []string
+		h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			extracted = injectproxy.MustLabelValues(r.Context())
+			w.WriteHeader(http.StatusOK)
+		})
+		return h, &extracted
+	}
 
-	// Test 1: Valid allowed clusters in context - values are sorted and
-	// wildcards are translated to regex
-	t.Run("ValidAllowedClusters", func(t *testing.T) {
+	t.Run("NamespacePartFromContext", func(t *testing.T) {
 		RegisterTestingT(t)
-		nextCalled = false
+		next, extracted := newTestHandler()
+		handler := namespaceExtractor.ExtractLabel(next)
 
 		req := httptest.NewRequest("GET", "/test", nil)
-		allowedPairs := [][2]string{
-			{"cluster1", "namespace2"},
-			{"cluster1", "dev-*"},
-			{"cluster1", "namespace1"},
-		}
 		ctx := context.WithValue(req.Context(), ContextKeyAllowedClusters, allowedPairs)
-		req = req.WithContext(ctx)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req.WithContext(ctx))
 
+		Expect(w.Code).To(Equal(http.StatusOK))
+		Expect(*extracted).To(Equal([]string{"dev-.*|namespace1|namespace2"}))
+	})
+
+	t.Run("ClusterPartFromContext", func(t *testing.T) {
+		RegisterTestingT(t)
+		next, extracted := newTestHandler()
+		handler := clusterExtractor.ExtractLabel(next)
+
+		req := httptest.NewRequest("GET", "/test", nil)
+		ctx := context.WithValue(req.Context(), ContextKeyAllowedClusters, allowedPairs)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req.WithContext(ctx))
+
+		Expect(w.Code).To(Equal(http.StatusOK))
+		Expect(*extracted).To(Equal([]string{"cluster1|cluster2"}))
+	})
+
+	t.Run("ClusterPartSetsInternalHeader", func(t *testing.T) {
+		RegisterTestingT(t)
+		// The outer (cluster) extractor must propagate the pairs to the inner
+		// proxy via the internal header.
+		var headerValue string
+		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			headerValue = r.Header.Get(internalAuthorizedResourcesHeader)
+			w.WriteHeader(http.StatusOK)
+		})
+		handler := clusterExtractor.ExtractLabel(next)
+
+		req := httptest.NewRequest("GET", "/test", nil)
+		ctx := context.WithValue(req.Context(), ContextKeyAllowedClusters, allowedPairs)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req.WithContext(ctx))
+
+		Expect(w.Code).To(Equal(http.StatusOK))
+		Expect(headerValue).ToNot(BeEmpty())
+		pairs, err := decodeAllowedPairs(headerValue)
+		Expect(err).To(BeNil())
+		Expect(pairs).To(Equal(allowedPairs))
+	})
+
+	t.Run("NamespacePartFromInternalHeader", func(t *testing.T) {
+		RegisterTestingT(t)
+		// The inner (namespace) extractor reads the pairs from the header set
+		// by the cluster extractor and removes the header so it does not
+		// reach the upstream.
+		next, extracted := newTestHandler()
+		handler := namespaceExtractor.ExtractLabel(next)
+
+		req := httptest.NewRequest("GET", "/test", nil)
+		encoded, err := encodeAllowedPairs(allowedPairs)
+		Expect(err).To(BeNil())
+		req.Header.Set(internalAuthorizedResourcesHeader, encoded)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 
 		Expect(w.Code).To(Equal(http.StatusOK))
-		Expect(nextCalled).To(BeTrue())
-		Expect(extractedValues).To(Equal([]string{"dev-.*|namespace1|namespace2"}))
+		Expect(*extracted).To(Equal([]string{"dev-.*|namespace1|namespace2"}))
+		Expect(req.Header.Get(internalAuthorizedResourcesHeader)).To(BeEmpty())
 	})
 
-	// Test 2: No allowed clusters in context
 	t.Run("NoAllowedClusters", func(t *testing.T) {
 		RegisterTestingT(t)
-		nextCalled = false
+		nextCalled := false
+		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			nextCalled = true
+			w.WriteHeader(http.StatusOK)
+		})
+		handler := namespaceExtractor.ExtractLabel(next)
 
 		req := httptest.NewRequest("GET", "/test", nil)
 		w := httptest.NewRecorder()
@@ -267,18 +365,19 @@ func TestContextLabelExtractor(t *testing.T) {
 		Expect(nextCalled).To(BeFalse())
 	})
 
-	// Test 3: Empty allowed clusters list
 	t.Run("EmptyAllowedClusters", func(t *testing.T) {
 		RegisterTestingT(t)
-		nextCalled = false
+		nextCalled := false
+		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			nextCalled = true
+			w.WriteHeader(http.StatusOK)
+		})
+		handler := namespaceExtractor.ExtractLabel(next)
 
 		req := httptest.NewRequest("GET", "/test", nil)
-		allowedPairs := [][2]string{}
-		ctx := context.WithValue(req.Context(), ContextKeyAllowedClusters, allowedPairs)
-		req = req.WithContext(ctx)
-
+		ctx := context.WithValue(req.Context(), ContextKeyAllowedClusters, [][2]string{})
 		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
+		handler.ServeHTTP(w, req.WithContext(ctx))
 
 		Expect(w.Code).To(Equal(http.StatusForbidden))
 		Expect(nextCalled).To(BeFalse())
@@ -289,20 +388,31 @@ func TestContextLabelExtractor(t *testing.T) {
 func TestNewPrometheusProxy(t *testing.T) {
 	RegisterTestingT(t)
 
-	// Test 1: Valid upstream URL
+	// Test 1: Valid upstream URL in dual-label mode
 	t.Run("ValidUpstreamURL", func(t *testing.T) {
 		RegisterTestingT(t)
 
-		proxy, err := newPrometheusProxy("http://localhost:9090", "namespace")
+		proxy, cleanup, err := newPrometheusProxy("http://localhost:9090", "namespace", "cluster")
+		t.Cleanup(cleanup)
 		Expect(err).To(BeNil())
 		Expect(proxy).ToNot(BeNil())
 	})
 
-	// Test 2: Invalid upstream URL
+	// Test 2: Valid upstream URL in single-label mode
+	t.Run("ValidUpstreamURLSingleLabel", func(t *testing.T) {
+		RegisterTestingT(t)
+
+		proxy, cleanup, err := newPrometheusProxy("http://localhost:9090", "namespace", "")
+		t.Cleanup(cleanup)
+		Expect(err).To(BeNil())
+		Expect(proxy).ToNot(BeNil())
+	})
+
+	// Test 3: Invalid upstream URL
 	t.Run("InvalidUpstreamURL", func(t *testing.T) {
 		RegisterTestingT(t)
 
-		proxy, err := newPrometheusProxy("://invalid-url", "namespace")
+		proxy, _, err := newPrometheusProxy("://invalid-url", "namespace", "cluster")
 		Expect(err).ToNot(BeNil())
 		Expect(proxy).To(BeNil())
 	})
@@ -326,7 +436,7 @@ func TestLabelInjectionWithDifferentQueries(t *testing.T) {
 			user:          "testuser",
 			datasource:    "datasource1",
 			expectedCode:  http.StatusOK,
-			expectedQuery: `up{namespace=~"test-namespace"}`,
+			expectedQuery: `up{cluster=~"cluster1",namespace=~"test-namespace"}`,
 		},
 		{
 			name:          "MetricWithLabels",
@@ -334,7 +444,7 @@ func TestLabelInjectionWithDifferentQueries(t *testing.T) {
 			user:          "testuser",
 			datasource:    "datasource1",
 			expectedCode:  http.StatusOK,
-			expectedQuery: `up{job="test",namespace=~"test-namespace"}`,
+			expectedQuery: `up{cluster=~"cluster1",job="test",namespace=~"test-namespace"}`,
 		},
 		{
 			name:          "ComplexQuery",
@@ -342,7 +452,7 @@ func TestLabelInjectionWithDifferentQueries(t *testing.T) {
 			user:          "testuser",
 			datasource:    "datasource1",
 			expectedCode:  http.StatusOK,
-			expectedQuery: `rate(http_requests_total{job="api",namespace=~"test-namespace"}[5m])`,
+			expectedQuery: `rate(http_requests_total{cluster=~"cluster1",job="api",namespace=~"test-namespace"}[5m])`,
 		},
 		{
 			name:          "UnauthorizedUser",
@@ -380,7 +490,7 @@ func TestQueryRangeEndpoint(t *testing.T) {
 
 	w := requestWithContext(t, handler, "GET", "/api/v1/query_range?query=up&start=0&end=100&step=15", "rangeuser", "datasource1")
 	Expect(w.Code).To(Equal(http.StatusOK))
-	Expect((*received)[len(*received)-1]).To(Equal(`up{namespace=~"test-ns"}`))
+	Expect((*received)[len(*received)-1]).To(Equal(`up{cluster=~"cluster1",namespace=~"test-ns"}`))
 }
 
 // TestMultipleNamespaceScenarios tests users with access to multiple namespaces
@@ -394,7 +504,7 @@ p, multiuser, datasource1, cluster1/namespace3, read`
 
 	w := requestWithContext(t, handler, "GET", "/api/v1/query?query=up", "multiuser", "datasource1")
 	Expect(w.Code).To(Equal(http.StatusOK))
-	Expect((*received)[len(*received)-1]).To(Equal(`up{namespace=~"namespace1|namespace2|namespace3"}`))
+	Expect((*received)[len(*received)-1]).To(Equal(`up{cluster=~"cluster1",namespace=~"namespace1|namespace2|namespace3"}`))
 }
 
 // TestUpstreamTLSWithCABundle verifies that the CA bundle is used to verify
@@ -509,7 +619,8 @@ func TestPolicyHotReload(t *testing.T) {
 	authz, err := NewAuthzService(ctx, policyDir)
 	Expect(err).To(BeNil())
 
-	promProxy, err := newPrometheusProxy(upstream.URL, "namespace")
+	promProxy, cleanup, err := newPrometheusProxy(upstream.URL, "namespace", "cluster")
+	t.Cleanup(cleanup)
 	Expect(err).To(BeNil())
 	handler := authz.authzMiddleware("read")(promProxy)
 
@@ -530,5 +641,5 @@ func TestPolicyHotReload(t *testing.T) {
 		w := requestWithContext(t, handler, "GET", "/api/v1/query?query=up", "seconduser", "datasource1")
 		return w.Code
 	}, 5*time.Second, 100*time.Millisecond).Should(Equal(http.StatusOK))
-	Expect((*received)[len(*received)-1]).To(Equal(`up{namespace=~"ns2"}`))
+	Expect((*received)[len(*received)-1]).To(Equal(`up{cluster=~"cluster1",namespace=~"ns2"}`))
 }

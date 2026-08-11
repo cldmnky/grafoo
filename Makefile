@@ -159,9 +159,17 @@ release: semver
 
 ##@ Build
 
+.PHONY: build-ui
+build-ui: ## Build the UI assets
+	cd cmd/dsproxy/ui && npm install && npm run build
+
 .PHONY: build
 build: manifests generate fmt vet ## Build manager binary.
 	go build -o bin/manager cmd/grafoo/main.go
+
+.PHONY: build-dsproxy
+build-dsproxy: build-ui ## Build dsproxy binary with embedded UI
+	go build -o bin/dsproxy ./cmd/dsproxy
 
 .PHONY: run
 run: manifests generate fmt vet ## Run a controller from your host.
@@ -175,6 +183,16 @@ docker-build:  manifests generate fmt vet ko ## Build docker image with the mana
 		--preserve-import-paths=false \
 		--bare=true \
 		./cmd/grafoo
+
+DSPROXY_IMAGE_TAG_BASE ?= quay.io/cldmnky/dsproxy
+
+.PHONY: docker-build-dsproxy
+docker-build-dsproxy: build-ui ## Build the DSProxy container image with the embedded UI.
+	$(CONTAINER_TOOL) build -f Dockerfile.dsproxy -t $(DSPROXY_IMAGE_TAG_BASE):latest .
+
+.PHONY: docker-push-dsproxy
+docker-push-dsproxy: ## Push the DSProxy container image.
+	$(CONTAINER_TOOL) push $(DSPROXY_IMAGE_TAG_BASE):latest
 
 .PHONY: docker-push
 docker-push: ## Push docker image with the manager.

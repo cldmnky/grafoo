@@ -2,185 +2,360 @@ package main
 
 import (
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
 	"encoding/json"
-	"io"
+	"encoding/pem"
+	"math/big"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	. "github.com/onsi/gomega"
+	"github.com/prometheus-community/prom-label-proxy/injectproxy"
 )
 
-// TestPrometheusProxyIntegration tests the full pipeline:
-// authz middleware → prom-label-proxy → upstream
-func TestPrometheusProxyIntegration(t *testing.T) {
-	RegisterTestingT(t)
-
-	// Create a mock Prometheus upstream server
-	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Verify the query parameter contains the injected label
-		query := r.URL.Query().Get("query")
-		t.Logf("Upstream received query: %s", query)
-
-		// Send back a mock Prometheus response
-		response := map[string]interface{}{
+// newUpstream captures the queries (query or match[] params) it receives and
+// returns a canned Prometheus response.
+func newUpstream(t *testing.T) (*httptest.Server, *[]string) {
+	t.Helper()
+	var received []string
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if q := r.URL.Query().Get("query"); q != "" {
+			received = append(received, q)
+		}
+		for _, m := range r.URL.Query()["match[]"] {
+			received = append(received, m)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{
 			"status": "success",
 			"data": map[string]interface{}{
 				"resultType": "vector",
 				"result":     []interface{}{},
 			},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
+		})
 	}))
-	defer upstreamServer.Close()
+	t.Cleanup(server.Close)
+	return server, &received
+}
 
-	// Create temporary policy directory for test
-	tmpDir := t.TempDir()
-	policyFile := filepath.Join(tmpDir, "policy.csv")
-	modelFile := filepath.Join(tmpDir, "model.conf")
+// newProxyChain builds the authz middleware wrapping a prom-label-proxy
+// handler pointed at the given upstream, using the default label names
+// (cluster + namespace).
+func newProxyChain(t *testing.T, policyCSV string, upstreamURL string) http.Handler {
+	return newProxyChainWithLabels(t, policyCSV, upstreamURL, "namespace", "cluster")
+}
 
-	// Write test policy
-	policyContent := `p, testuser, datasource1, cluster1/test-namespace, read
+// newProxyChainWithLabels builds the authz middleware wrapping a
+// prom-label-proxy handler with explicit label names.
+func newProxyChainWithLabels(t *testing.T, policyCSV string, upstreamURL, namespaceLabel, clusterLabel string) http.Handler {
+	t.Helper()
+	authz := setupAuthz(t, policyCSV)
+	promProxy, cleanup, err := newPrometheusProxy(upstreamURL, namespaceLabel, clusterLabel)
+	if err != nil {
+		t.Fatalf("failed to create prometheus proxy: %v", err)
+	}
+	t.Cleanup(cleanup)
+	return authz.authzMiddleware("read")(promProxy)
+}
+
+func requestWithContext(t *testing.T, handler http.Handler, method, path string, user string, datasource string) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(method, path, nil)
+	ctx := context.WithValue(req.Context(), ContextKeyEmail, user)
+	ctx = context.WithValue(ctx, ContextKeyGroups, []string{})
+	ctx = context.WithValue(ctx, ContextDataSourceID, datasource)
+	req = req.WithContext(ctx)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	return w
+}
+
+// TestPrometheusProxyIntegration tests the full pipeline:
+// authz middleware → prom-label-proxy → upstream
+func TestPrometheusProxyIntegration(t *testing.T) {
+	RegisterTestingT(t)
+	upstream, received := newUpstream(t)
+
+	policy := `p, testuser, datasource1, cluster1/test-namespace, read
 p, adminuser, *, */*, read
 g, testuser, developers`
-	err := os.WriteFile(policyFile, []byte(policyContent), 0644)
-	Expect(err).To(BeNil())
-
-	// Write test model
-	modelContent := `[request_definition]
-r = sub, dom, obj, act
-
-[policy_definition]
-p = sub, dom, obj, act
-
-[role_definition]
-g = _, _
-
-[policy_effect]
-e = some(where (p.eft == allow))
-
-[matchers]
-m = (g(r.sub, p.sub) || r.sub == p.sub) &&
-    (keyMatch2(r.dom, p.dom) || p.dom == "*") &&
-    (keyMatch2(r.obj, p.obj) || p.obj == "*") &&
-    r.act == p.act`
-	err = os.WriteFile(modelFile, []byte(modelContent), 0644)
-	Expect(err).To(BeNil())
-
-	// Create authz service
-	authzService, err := NewAuthzService(context.Background(), tmpDir)
-	Expect(err).To(BeNil())
-	Expect(authzService).ToNot(BeNil())
-
-	// Create prom-label-proxy
-	promProxy, err := newPrometheusProxy(upstreamServer.URL, "namespace")
-	Expect(err).To(BeNil())
-	Expect(promProxy).ToNot(BeNil())
-
-	// Wrap with authz middleware
-	handler := authzService.authzMiddleware("read")(promProxy)
+	handler := newProxyChain(t, policy, upstream.URL)
 
 	// Test 1: User with authorized namespace
-	t.Run("AuthorizedUser", func(t *testing.T) {
-		RegisterTestingT(t)
-
-		req := httptest.NewRequest("GET", "/api/v1/query?query=up", nil)
-		ctx := context.WithValue(req.Context(), ContextKeyEmail, "testuser")
-		ctx = context.WithValue(ctx, ContextKeyGroups, []string{"developers"})
-		ctx = context.WithValue(ctx, ContextDataSourceID, "datasource1")
-		req = req.WithContext(ctx)
-
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-
-		Expect(w.Code).To(Equal(http.StatusOK))
-		body := w.Body.String()
-		t.Logf("Response: %s", body)
-
-		var response map[string]interface{}
-		err := json.Unmarshal([]byte(body), &response)
-		Expect(err).To(BeNil())
-		Expect(response["status"]).To(Equal("success"))
-	})
+	w := requestWithContext(t, handler, "GET", "/api/v1/query?query=up", "testuser", "datasource1")
+	Expect(w.Code).To(Equal(http.StatusOK))
+	Expect((*received)[len(*received)-1]).To(Equal(`up{cluster=~"cluster1",namespace=~"test-namespace"}`))
 
 	// Test 2: User without authorization
-	t.Run("UnauthorizedUser", func(t *testing.T) {
+	w = requestWithContext(t, handler, "GET", "/api/v1/query?query=up", "unauthorized", "datasource1")
+	Expect(w.Code).To(Equal(http.StatusForbidden))
+
+	// Test 3: Admin with wildcard access. Prometheus sorts label matchers
+	// alphabetically, so the injected labels appear before "job".
+	w = requestWithContext(t, handler, "GET", `/api/v1/query?query=up{job="test"}`, "adminuser", "any-datasource")
+	Expect(w.Code).To(Equal(http.StatusOK))
+	Expect((*received)[len(*received)-1]).To(Equal(`up{cluster=~".+",job="test",namespace=~".+"}`))
+}
+
+// TestWildcardPolicyInjection verifies that keyMatch2-style patterns are
+// translated into PromQL regex matchers.
+func TestWildcardPolicyInjection(t *testing.T) {
+	RegisterTestingT(t)
+
+	t.Run("namespace prefix wildcard", func(t *testing.T) {
 		RegisterTestingT(t)
-
-		req := httptest.NewRequest("GET", "/api/v1/query?query=up", nil)
-		ctx := context.WithValue(req.Context(), ContextKeyEmail, "unauthorized")
-		ctx = context.WithValue(ctx, ContextKeyGroups, []string{})
-		ctx = context.WithValue(ctx, ContextDataSourceID, "datasource1")
-		req = req.WithContext(ctx)
-
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-
-		Expect(w.Code).To(Equal(http.StatusForbidden))
+		upstream, received := newUpstream(t)
+		handler := newProxyChain(t, "p, bob, *, cluster1/dev-*, read", upstream.URL)
+		w := requestWithContext(t, handler, "GET", "/api/v1/query?query=up", "bob", "datasource1")
+		Expect(w.Code).To(Equal(http.StatusOK))
+		Expect((*received)[len(*received)-1]).To(Equal(`up{cluster=~"cluster1",namespace=~"dev-.*"}`))
 	})
 
-	// Test 3: Admin with wildcard access
-	t.Run("AdminWithWildcard", func(t *testing.T) {
+	t.Run("any cluster pattern", func(t *testing.T) {
 		RegisterTestingT(t)
-
-		req := httptest.NewRequest("GET", "/api/v1/query?query=up{job=\"test\"}", nil)
-		ctx := context.WithValue(req.Context(), ContextKeyEmail, "adminuser")
-		ctx = context.WithValue(ctx, ContextKeyGroups, []string{})
-		ctx = context.WithValue(ctx, ContextDataSourceID, "any-datasource")
-		req = req.WithContext(ctx)
-
-		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
-
+		upstream, received := newUpstream(t)
+		handler := newProxyChain(t, "p, qa, *, */qa-*, read", upstream.URL)
+		w := requestWithContext(t, handler, "GET", "/api/v1/query?query=up", "qa", "datasource1")
 		Expect(w.Code).To(Equal(http.StatusOK))
+		Expect((*received)[len(*received)-1]).To(Equal(`up{cluster=~".+",namespace=~"qa-.*"}`))
+	})
+
+	t.Run("all namespaces in a cluster", func(t *testing.T) {
+		RegisterTestingT(t)
+		upstream, received := newUpstream(t)
+		handler := newProxyChain(t, "p, sre, *, prod-cluster/*, read", upstream.URL)
+		w := requestWithContext(t, handler, "GET", "/api/v1/query?query=up", "sre", "datasource1")
+		Expect(w.Code).To(Equal(http.StatusOK))
+		Expect((*received)[len(*received)-1]).To(Equal(`up{cluster=~"prod-cluster",namespace=~".+"}`))
 	})
 }
 
-// TestContextLabelExtractor tests the label extraction logic
+// TestMultiNamespaceInjection verifies that a user authorized for several
+// namespaces gets a deterministic regex union injected.
+func TestMultiNamespaceInjection(t *testing.T) {
+	RegisterTestingT(t)
+	upstream, received := newUpstream(t)
+	policy := `p, multiuser, datasource1, cluster1/namespace3, read
+p, multiuser, datasource1, cluster1/namespace1, read
+p, multiuser, datasource1, cluster1/namespace2, read`
+	handler := newProxyChain(t, policy, upstream.URL)
+
+	// Multiple requests must produce the same sorted injection
+	for i := 0; i < 5; i++ {
+		w := requestWithContext(t, handler, "GET", "/api/v1/query?query=up", "multiuser", "datasource1")
+		Expect(w.Code).To(Equal(http.StatusOK))
+		Expect((*received)[len(*received)-1]).To(Equal(`up{cluster=~"cluster1",namespace=~"namespace1|namespace2|namespace3"}`))
+	}
+}
+
+// TestSameNamespaceDifferentClusters verifies that the same namespace name
+// authorized in multiple clusters is injected once while the cluster matcher
+// covers both clusters.
+func TestSameNamespaceDifferentClusters(t *testing.T) {
+	RegisterTestingT(t)
+	upstream, received := newUpstream(t)
+	policy := `p, user, datasource1, cluster1/shared-ns, read
+p, user, datasource1, cluster2/shared-ns, read`
+	handler := newProxyChain(t, policy, upstream.URL)
+	w := requestWithContext(t, handler, "GET", "/api/v1/query?query=up", "user", "datasource1")
+	Expect(w.Code).To(Equal(http.StatusOK))
+	Expect((*received)[len(*received)-1]).To(Equal(`up{cluster=~"cluster1|cluster2",namespace=~"shared-ns"}`))
+}
+
+// TestCustomLabelNames verifies that the injected label names are
+// configurable (e.g. k8s_cluster / k8s_namespace instead of cluster /
+// namespace).
+func TestCustomLabelNames(t *testing.T) {
+	RegisterTestingT(t)
+	upstream, received := newUpstream(t)
+	handler := newProxyChainWithLabels(t, "p, alice, datasource1, cluster1/monitoring, read", upstream.URL, "k8s_namespace", "k8s_cluster")
+
+	w := requestWithContext(t, handler, "GET", "/api/v1/query?query=up", "alice", "datasource1")
+	Expect(w.Code).To(Equal(http.StatusOK))
+	Expect((*received)[len(*received)-1]).To(Equal(`up{k8s_cluster=~"cluster1",k8s_namespace=~"monitoring"}`))
+}
+
+// TestSingleLabelMode verifies that setting an empty cluster label disables
+// cluster injection (backwards compatible namespace-only behavior).
+func TestSingleLabelMode(t *testing.T) {
+	RegisterTestingT(t)
+	upstream, received := newUpstream(t)
+	handler := newProxyChainWithLabels(t, "p, alice, datasource1, cluster1/monitoring, read", upstream.URL, "namespace", "")
+
+	w := requestWithContext(t, handler, "GET", "/api/v1/query?query=up", "alice", "datasource1")
+	Expect(w.Code).To(Equal(http.StatusOK))
+	Expect((*received)[len(*received)-1]).To(Equal(`up{namespace=~"monitoring"}`))
+}
+
+// TestUserNamespaceMatcherIsOverridden verifies that a user cannot escape
+// tenant isolation by specifying their own namespace matcher. In regex match
+// mode the user's matcher is preserved and ANDed with the injected regex, so
+// a conflicting matcher simply yields no results (no data leakage).
+func TestUserNamespaceMatcherIsOverridden(t *testing.T) {
+	RegisterTestingT(t)
+	upstream, received := newUpstream(t)
+	handler := newProxyChain(t, "p, alice, datasource1, cluster1/monitoring, read", upstream.URL)
+
+	// Query attempting to access another namespace. The proxy must not 403
+	// (the user is authorized for monitoring) but the injected matcher is
+	// ANDed with the user's matcher, so the query cannot match "database".
+	w := requestWithContext(t, handler, "GET", `/api/v1/query?query=up{namespace="database"}`, "alice", "datasource1")
+	Expect(w.Code).To(Equal(http.StatusOK))
+	forwarded := (*received)[len(*received)-1]
+	Expect(forwarded).To(ContainSubstring(`cluster=~"cluster1"`))
+	Expect(forwarded).To(ContainSubstring(`namespace=~"monitoring"`))
+	// The conflicting user matcher is preserved: namespace="database" AND
+	// namespace=~"monitoring" can never match a series.
+	Expect(forwarded).To(ContainSubstring(`namespace="database"`))
+}
+
+// TestSeriesMatcherInjection verifies that /api/v1/series gets the label
+// injected into every match[] parameter.
+func TestSeriesMatcherInjection(t *testing.T) {
+	RegisterTestingT(t)
+	upstream, received := newUpstream(t)
+	handler := newProxyChain(t, "p, alice, datasource1, cluster1/monitoring, read", upstream.URL)
+
+	w := requestWithContext(t, handler, "GET", `/api/v1/series?match[]={job="api"}`, "alice", "datasource1")
+	Expect(w.Code).To(Equal(http.StatusOK))
+	Expect((*received)[len(*received)-1]).To(Equal(`{job="api",cluster=~"cluster1",namespace=~"monitoring"}`))
+}
+
+// TestLabelsAPIEnabled verifies that the label metadata endpoints are
+// proxied with label injection enabled.
+func TestLabelsAPIEnabled(t *testing.T) {
+	RegisterTestingT(t)
+	upstream, received := newUpstream(t)
+	handler := newProxyChain(t, "p, alice, datasource1, cluster1/monitoring, read", upstream.URL)
+
+	w := requestWithContext(t, handler, "GET", `/api/v1/labels?match[]={job="api"}`, "alice", "datasource1")
+	Expect(w.Code).To(Equal(http.StatusOK))
+	Expect((*received)[len(*received)-1]).To(Equal(`{job="api",cluster=~"cluster1",namespace=~"monitoring"}`))
+
+	w = requestWithContext(t, handler, "GET", `/api/v1/label/job/values?match[]={job="api"}`, "alice", "datasource1")
+	Expect(w.Code).To(Equal(http.StatusOK))
+	Expect((*received)[len(*received)-1]).To(Equal(`{job="api",cluster=~"cluster1",namespace=~"monitoring"}`))
+}
+
+// TestContextLabelExtractor tests the label extraction logic for both the
+// namespace and the cluster part.
 func TestContextLabelExtractor(t *testing.T) {
 	RegisterTestingT(t)
 
-	extractor := &contextLabelExtractor{
+	namespaceExtractor := &contextLabelExtractor{
 		label: "namespace",
+		part:  partNamespace,
+	}
+	clusterExtractor := &contextLabelExtractor{
+		label: "cluster",
+		part:  partCluster,
 	}
 
-	// Create a test handler that will be wrapped
-	nextCalled := false
-	nextHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		nextCalled = true
-		w.WriteHeader(http.StatusOK)
-	})
+	allowedPairs := [][2]string{
+		{"cluster1", "namespace2"},
+		{"cluster1", "dev-*"},
+		{"cluster2", "namespace1"},
+	}
 
-	handler := extractor.ExtractLabel(nextHandler)
+	newTestHandler := func() (http.HandlerFunc, *[]string) {
+		var extracted []string
+		h := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			extracted = injectproxy.MustLabelValues(r.Context())
+			w.WriteHeader(http.StatusOK)
+		})
+		return h, &extracted
+	}
 
-	// Test 1: Valid allowed clusters in context
-	t.Run("ValidAllowedClusters", func(t *testing.T) {
+	t.Run("NamespacePartFromContext", func(t *testing.T) {
 		RegisterTestingT(t)
-		nextCalled = false
+		next, extracted := newTestHandler()
+		handler := namespaceExtractor.ExtractLabel(next)
 
 		req := httptest.NewRequest("GET", "/test", nil)
-		allowedPairs := [][2]string{
-			{"cluster1", "namespace1"},
-			{"cluster1", "namespace2"},
-		}
 		ctx := context.WithValue(req.Context(), ContextKeyAllowedClusters, allowedPairs)
-		req = req.WithContext(ctx)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req.WithContext(ctx))
 
+		Expect(w.Code).To(Equal(http.StatusOK))
+		Expect(*extracted).To(Equal([]string{"dev-.*|namespace1|namespace2"}))
+	})
+
+	t.Run("ClusterPartFromContext", func(t *testing.T) {
+		RegisterTestingT(t)
+		next, extracted := newTestHandler()
+		handler := clusterExtractor.ExtractLabel(next)
+
+		req := httptest.NewRequest("GET", "/test", nil)
+		ctx := context.WithValue(req.Context(), ContextKeyAllowedClusters, allowedPairs)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req.WithContext(ctx))
+
+		Expect(w.Code).To(Equal(http.StatusOK))
+		Expect(*extracted).To(Equal([]string{"cluster1|cluster2"}))
+	})
+
+	t.Run("ClusterPartSetsInternalHeader", func(t *testing.T) {
+		RegisterTestingT(t)
+		// The outer (cluster) extractor must propagate the pairs to the inner
+		// proxy via the internal header.
+		var headerValue string
+		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			headerValue = r.Header.Get(internalAuthorizedResourcesHeader)
+			w.WriteHeader(http.StatusOK)
+		})
+		handler := clusterExtractor.ExtractLabel(next)
+
+		req := httptest.NewRequest("GET", "/test", nil)
+		ctx := context.WithValue(req.Context(), ContextKeyAllowedClusters, allowedPairs)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req.WithContext(ctx))
+
+		Expect(w.Code).To(Equal(http.StatusOK))
+		Expect(headerValue).ToNot(BeEmpty())
+		pairs, err := decodeAllowedPairs(headerValue)
+		Expect(err).To(BeNil())
+		Expect(pairs).To(Equal(allowedPairs))
+	})
+
+	t.Run("NamespacePartFromInternalHeader", func(t *testing.T) {
+		RegisterTestingT(t)
+		// The inner (namespace) extractor reads the pairs from the header set
+		// by the cluster extractor and removes the header so it does not
+		// reach the upstream.
+		next, extracted := newTestHandler()
+		handler := namespaceExtractor.ExtractLabel(next)
+
+		req := httptest.NewRequest("GET", "/test", nil)
+		encoded, err := encodeAllowedPairs(allowedPairs)
+		Expect(err).To(BeNil())
+		req.Header.Set(internalAuthorizedResourcesHeader, encoded)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 
 		Expect(w.Code).To(Equal(http.StatusOK))
-		Expect(nextCalled).To(BeTrue())
+		Expect(*extracted).To(Equal([]string{"dev-.*|namespace1|namespace2"}))
+		Expect(req.Header.Get(internalAuthorizedResourcesHeader)).To(BeEmpty())
 	})
 
-	// Test 2: No allowed clusters in context
 	t.Run("NoAllowedClusters", func(t *testing.T) {
 		RegisterTestingT(t)
-		nextCalled = false
+		nextCalled := false
+		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			nextCalled = true
+			w.WriteHeader(http.StatusOK)
+		})
+		handler := namespaceExtractor.ExtractLabel(next)
 
 		req := httptest.NewRequest("GET", "/test", nil)
 		w := httptest.NewRecorder()
@@ -190,18 +365,19 @@ func TestContextLabelExtractor(t *testing.T) {
 		Expect(nextCalled).To(BeFalse())
 	})
 
-	// Test 3: Empty allowed clusters list
 	t.Run("EmptyAllowedClusters", func(t *testing.T) {
 		RegisterTestingT(t)
-		nextCalled = false
+		nextCalled := false
+		next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			nextCalled = true
+			w.WriteHeader(http.StatusOK)
+		})
+		handler := namespaceExtractor.ExtractLabel(next)
 
 		req := httptest.NewRequest("GET", "/test", nil)
-		allowedPairs := [][2]string{}
-		ctx := context.WithValue(req.Context(), ContextKeyAllowedClusters, allowedPairs)
-		req = req.WithContext(ctx)
-
+		ctx := context.WithValue(req.Context(), ContextKeyAllowedClusters, [][2]string{})
 		w := httptest.NewRecorder()
-		handler.ServeHTTP(w, req)
+		handler.ServeHTTP(w, req.WithContext(ctx))
 
 		Expect(w.Code).To(Equal(http.StatusForbidden))
 		Expect(nextCalled).To(BeFalse())
@@ -212,20 +388,31 @@ func TestContextLabelExtractor(t *testing.T) {
 func TestNewPrometheusProxy(t *testing.T) {
 	RegisterTestingT(t)
 
-	// Test 1: Valid upstream URL
+	// Test 1: Valid upstream URL in dual-label mode
 	t.Run("ValidUpstreamURL", func(t *testing.T) {
 		RegisterTestingT(t)
 
-		proxy, err := newPrometheusProxy("http://localhost:9090", "namespace")
+		proxy, cleanup, err := newPrometheusProxy("http://localhost:9090", "namespace", "cluster")
+		t.Cleanup(cleanup)
 		Expect(err).To(BeNil())
 		Expect(proxy).ToNot(BeNil())
 	})
 
-	// Test 2: Invalid upstream URL
+	// Test 2: Valid upstream URL in single-label mode
+	t.Run("ValidUpstreamURLSingleLabel", func(t *testing.T) {
+		RegisterTestingT(t)
+
+		proxy, cleanup, err := newPrometheusProxy("http://localhost:9090", "namespace", "")
+		t.Cleanup(cleanup)
+		Expect(err).To(BeNil())
+		Expect(proxy).ToNot(BeNil())
+	})
+
+	// Test 3: Invalid upstream URL
 	t.Run("InvalidUpstreamURL", func(t *testing.T) {
 		RegisterTestingT(t)
 
-		proxy, err := newPrometheusProxy("://invalid-url", "namespace")
+		proxy, _, err := newPrometheusProxy("://invalid-url", "namespace", "cluster")
 		Expect(err).ToNot(BeNil())
 		Expect(proxy).To(BeNil())
 	})
@@ -241,7 +428,7 @@ func TestLabelInjectionWithDifferentQueries(t *testing.T) {
 		user          string
 		datasource    string
 		expectedCode  int
-		shouldContain string // substring to check in forwarded query
+		expectedQuery string
 	}{
 		{
 			name:          "SimpleMetric",
@@ -249,23 +436,23 @@ func TestLabelInjectionWithDifferentQueries(t *testing.T) {
 			user:          "testuser",
 			datasource:    "datasource1",
 			expectedCode:  http.StatusOK,
-			shouldContain: "namespace",
+			expectedQuery: `up{cluster=~"cluster1",namespace=~"test-namespace"}`,
 		},
 		{
 			name:          "MetricWithLabels",
-			originalQuery: "up{job=\"test\"}",
+			originalQuery: `up{job="test"}`,
 			user:          "testuser",
 			datasource:    "datasource1",
 			expectedCode:  http.StatusOK,
-			shouldContain: "namespace",
+			expectedQuery: `up{cluster=~"cluster1",job="test",namespace=~"test-namespace"}`,
 		},
 		{
 			name:          "ComplexQuery",
-			originalQuery: "rate(http_requests_total{job=\"api\"}[5m])",
+			originalQuery: `rate(http_requests_total{job="api"}[5m])`,
 			user:          "testuser",
 			datasource:    "datasource1",
 			expectedCode:  http.StatusOK,
-			shouldContain: "namespace",
+			expectedQuery: `rate(http_requests_total{cluster=~"cluster1",job="api",namespace=~"test-namespace"}[5m])`,
 		},
 		{
 			name:          "UnauthorizedUser",
@@ -273,7 +460,7 @@ func TestLabelInjectionWithDifferentQueries(t *testing.T) {
 			user:          "unauthorized",
 			datasource:    "datasource1",
 			expectedCode:  http.StatusForbidden,
-			shouldContain: "",
+			expectedQuery: "",
 		},
 	}
 
@@ -281,77 +468,15 @@ func TestLabelInjectionWithDifferentQueries(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			RegisterTestingT(t)
 
-			// Track queries received by upstream
-			var receivedQuery string
-			upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				receivedQuery = r.URL.Query().Get("query")
-				t.Logf("Upstream received: %s", receivedQuery)
+			upstream, received := newUpstream(t)
+			handler := newProxyChain(t, "p, testuser, datasource1, cluster1/test-namespace, read", upstream.URL)
 
-				response := map[string]interface{}{
-					"status": "success",
-					"data": map[string]interface{}{
-						"resultType": "vector",
-						"result":     []interface{}{},
-					},
-				}
-				w.Header().Set("Content-Type", "application/json")
-				json.NewEncoder(w).Encode(response)
-			}))
-			defer upstreamServer.Close()
-
-			// Setup policy
-			tmpDir := t.TempDir()
-			policyFile := filepath.Join(tmpDir, "policy.csv")
-			modelFile := filepath.Join(tmpDir, "model.conf")
-
-			policyContent := `p, testuser, datasource1, cluster1/test-namespace, read
-p, adminuser, *, */*, read`
-			os.WriteFile(policyFile, []byte(policyContent), 0644)
-
-			modelContent := `[request_definition]
-r = sub, dom, obj, act
-
-[policy_definition]
-p = sub, dom, obj, act
-
-[role_definition]
-g = _, _
-
-[policy_effect]
-e = some(where (p.eft == allow))
-
-[matchers]
-m = (g(r.sub, p.sub) || r.sub == p.sub) &&
-    (keyMatch2(r.dom, p.dom) || p.dom == "*") &&
-    (keyMatch2(r.obj, p.obj) || p.obj == "*") &&
-    r.act == p.act`
-			os.WriteFile(modelFile, []byte(modelContent), 0644)
-
-			authzService, err := NewAuthzService(context.Background(), tmpDir)
-			Expect(err).To(BeNil())
-
-			promProxy, err := newPrometheusProxy(upstreamServer.URL, "namespace")
-			Expect(err).To(BeNil())
-
-			handler := authzService.authzMiddleware("read")(promProxy)
-
-			// Make request
 			encodedQuery := url.QueryEscape(tc.originalQuery)
-			req := httptest.NewRequest("GET", "/api/v1/query?query="+encodedQuery, nil)
-			ctx := context.WithValue(req.Context(), ContextKeyEmail, tc.user)
-			ctx = context.WithValue(ctx, ContextKeyGroups, []string{})
-			ctx = context.WithValue(ctx, ContextDataSourceID, tc.datasource)
-			req = req.WithContext(ctx)
-
-			w := httptest.NewRecorder()
-			handler.ServeHTTP(w, req)
-
+			w := requestWithContext(t, handler, "GET", "/api/v1/query?query="+encodedQuery, tc.user, tc.datasource)
 			Expect(w.Code).To(Equal(tc.expectedCode))
 
-			if tc.expectedCode == http.StatusOK && tc.shouldContain != "" {
-				// For authorized requests, verify label was injected
-				Expect(receivedQuery).To(ContainSubstring(tc.shouldContain))
-				t.Logf("Original: %s → Transformed: %s", tc.originalQuery, receivedQuery)
+			if tc.expectedCode == http.StatusOK {
+				Expect((*received)[len(*received)-1]).To(Equal(tc.expectedQuery))
 			}
 		})
 	}
@@ -360,150 +485,161 @@ m = (g(r.sub, p.sub) || r.sub == p.sub) &&
 // TestQueryRangeEndpoint tests the /api/v1/query_range endpoint
 func TestQueryRangeEndpoint(t *testing.T) {
 	RegisterTestingT(t)
+	upstream, received := newUpstream(t)
+	handler := newProxyChain(t, "p, rangeuser, datasource1, cluster1/test-ns, read", upstream.URL)
 
-	var receivedQuery string
-	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		receivedQuery = r.URL.Query().Get("query")
-		t.Logf("query_range upstream received: %s", receivedQuery)
-
-		response := map[string]interface{}{
-			"status": "success",
-			"data": map[string]interface{}{
-				"resultType": "matrix",
-				"result":     []interface{}{},
-			},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
-	}))
-	defer upstreamServer.Close()
-
-	// Setup
-	tmpDir := t.TempDir()
-	policyFile := filepath.Join(tmpDir, "policy.csv")
-	modelFile := filepath.Join(tmpDir, "model.conf")
-
-	policyContent := `p, rangeuser, datasource1, cluster1/test-ns, read`
-	os.WriteFile(policyFile, []byte(policyContent), 0644)
-
-	modelContent := `[request_definition]
-r = sub, dom, obj, act
-
-[policy_definition]
-p = sub, dom, obj, act
-
-[role_definition]
-g = _, _
-
-[policy_effect]
-e = some(where (p.eft == allow))
-
-[matchers]
-m = (g(r.sub, p.sub) || r.sub == p.sub) &&
-    (keyMatch2(r.dom, p.dom) || p.dom == "*") &&
-    (keyMatch2(r.obj, p.obj) || p.obj == "*") &&
-    r.act == p.act`
-	os.WriteFile(modelFile, []byte(modelContent), 0644)
-
-	authzService, err := NewAuthzService(context.Background(), tmpDir)
-	Expect(err).To(BeNil())
-
-	promProxy, err := newPrometheusProxy(upstreamServer.URL, "namespace")
-	Expect(err).To(BeNil())
-
-	handler := authzService.authzMiddleware("read")(promProxy)
-
-	// Test query_range request
-	req := httptest.NewRequest("GET", "/api/v1/query_range?query=up&start=0&end=100&step=15", nil)
-	ctx := context.WithValue(req.Context(), ContextKeyEmail, "rangeuser")
-	ctx = context.WithValue(ctx, ContextKeyGroups, []string{})
-	ctx = context.WithValue(ctx, ContextDataSourceID, "datasource1")
-	req = req.WithContext(ctx)
-
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
+	w := requestWithContext(t, handler, "GET", "/api/v1/query_range?query=up&start=0&end=100&step=15", "rangeuser", "datasource1")
 	Expect(w.Code).To(Equal(http.StatusOK))
-	Expect(receivedQuery).To(ContainSubstring("namespace"))
-
-	// Verify response is valid JSON
-	body, err := io.ReadAll(w.Body)
-	Expect(err).To(BeNil())
-
-	var response map[string]interface{}
-	err = json.Unmarshal(body, &response)
-	Expect(err).To(BeNil())
-	Expect(response["status"]).To(Equal("success"))
+	Expect((*received)[len(*received)-1]).To(Equal(`up{cluster=~"cluster1",namespace=~"test-ns"}`))
 }
 
 // TestMultipleNamespaceScenarios tests users with access to multiple namespaces
 func TestMultipleNamespaceScenarios(t *testing.T) {
 	RegisterTestingT(t)
-
-	upstreamServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		query := r.URL.Query().Get("query")
-		t.Logf("Multi-namespace query: %s", query)
-
-		response := map[string]interface{}{
-			"status": "success",
-			"data": map[string]interface{}{
-				"resultType": "vector",
-				"result":     []interface{}{},
-			},
-		}
-		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(response)
-	}))
-	defer upstreamServer.Close()
-
-	tmpDir := t.TempDir()
-	policyFile := filepath.Join(tmpDir, "policy.csv")
-	modelFile := filepath.Join(tmpDir, "model.conf")
-
-	// User with access to multiple namespaces
-	policyContent := `p, multiuser, datasource1, cluster1/namespace1, read
+	upstream, received := newUpstream(t)
+	policy := `p, multiuser, datasource1, cluster1/namespace1, read
 p, multiuser, datasource1, cluster1/namespace2, read
 p, multiuser, datasource1, cluster1/namespace3, read`
-	os.WriteFile(policyFile, []byte(policyContent), 0644)
+	handler := newProxyChain(t, policy, upstream.URL)
 
-	modelContent := `[request_definition]
-r = sub, dom, obj, act
-
-[policy_definition]
-p = sub, dom, obj, act
-
-[role_definition]
-g = _, _
-
-[policy_effect]
-e = some(where (p.eft == allow))
-
-[matchers]
-m = (g(r.sub, p.sub) || r.sub == p.sub) &&
-    (keyMatch2(r.dom, p.dom) || p.dom == "*") &&
-    (keyMatch2(r.obj, p.obj) || p.obj == "*") &&
-    r.act == p.act`
-	os.WriteFile(modelFile, []byte(modelContent), 0644)
-
-	authzService, err := NewAuthzService(context.Background(), tmpDir)
-	Expect(err).To(BeNil())
-
-	promProxy, err := newPrometheusProxy(upstreamServer.URL, "namespace")
-	Expect(err).To(BeNil())
-
-	handler := authzService.authzMiddleware("read")(promProxy)
-
-	req := httptest.NewRequest("GET", "/api/v1/query?query=up", nil)
-	ctx := context.WithValue(req.Context(), ContextKeyEmail, "multiuser")
-	ctx = context.WithValue(ctx, ContextKeyGroups, []string{})
-	ctx = context.WithValue(ctx, ContextDataSourceID, "datasource1")
-	req = req.WithContext(ctx)
-
-	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
-	// Should succeed but currently only uses first namespace
-	// TODO: In the future, should inject namespace=~"namespace1|namespace2|namespace3"
+	w := requestWithContext(t, handler, "GET", "/api/v1/query?query=up", "multiuser", "datasource1")
 	Expect(w.Code).To(Equal(http.StatusOK))
-	t.Log("Note: Currently only first namespace is injected. Multi-namespace regex support is a TODO.")
+	Expect((*received)[len(*received)-1]).To(Equal(`up{cluster=~"cluster1",namespace=~"namespace1|namespace2|namespace3"}`))
+}
+
+// TestUpstreamTLSWithCABundle verifies that the CA bundle is used to verify
+// the upstream Prometheus server certificate.
+func TestUpstreamTLSWithCABundle(t *testing.T) {
+	RegisterTestingT(t)
+
+	// Generate a self-signed certificate for the upstream server
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	Expect(err).To(BeNil())
+	template := x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "localhost"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+		DNSNames:              []string{"localhost"},
+		BasicConstraintsValid: true,
+	}
+	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	Expect(err).To(BeNil())
+	cert := tls.Certificate{
+		Certificate: [][]byte{derBytes},
+		PrivateKey:  priv,
+	}
+
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]interface{}{"status": "success", "data": map[string]interface{}{}})
+	}))
+	server.TLS = &tls.Config{Certificates: []tls.Certificate{cert}}
+	server.StartTLS()
+	defer server.Close()
+
+	// Write the CA certificate to a temp file
+	caPath := filepath.Join(t.TempDir(), "ca.pem")
+	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: derBytes})
+	Expect(os.WriteFile(caPath, certPEM, 0644)).To(Succeed())
+
+	origCABundle := f_caBundle
+	origDefaultTransport := http.DefaultTransport
+	t.Cleanup(func() {
+		f_caBundle = origCABundle
+		http.DefaultTransport = origDefaultTransport
+	})
+	f_caBundle = caPath
+	Expect(configureUpstreamTLS()).To(Succeed())
+
+	handler := newProxyChain(t, "p, tlsuser, datasource1, cluster1/test-ns, read", server.URL)
+	w := requestWithContext(t, handler, "GET", "/api/v1/query?query=up", "tlsuser", "datasource1")
+	Expect(w.Code).To(Equal(http.StatusOK))
+	Expect(w.Body.String()).To(ContainSubstring("success"))
+}
+
+// TestUpstreamTLSWithoutCABundleFails verifies that a self-signed upstream
+// fails when the CA bundle is not trusted.
+func TestUpstreamTLSWithoutCABundleFails(t *testing.T) {
+	RegisterTestingT(t)
+
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	Expect(err).To(BeNil())
+	template := x509.Certificate{
+		SerialNumber:          big.NewInt(1),
+		Subject:               pkix.Name{CommonName: "localhost"},
+		NotBefore:             time.Now().Add(-time.Hour),
+		NotAfter:              time.Now().Add(time.Hour),
+		KeyUsage:              x509.KeyUsageDigitalSignature,
+		ExtKeyUsage:           []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+		IPAddresses:           []net.IP{net.ParseIP("127.0.0.1")},
+		DNSNames:              []string{"localhost"},
+		BasicConstraintsValid: true,
+	}
+	derBytes, err := x509.CreateCertificate(rand.Reader, &template, &template, &priv.PublicKey, priv)
+	Expect(err).To(BeNil())
+	cert := tls.Certificate{Certificate: [][]byte{derBytes}, PrivateKey: priv}
+
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	server.TLS = &tls.Config{Certificates: []tls.Certificate{cert}}
+	server.StartTLS()
+	defer server.Close()
+
+	// Ensure no CA bundle is configured. The default transport does not
+	// trust the self-signed test certificate.
+	origCABundle := f_caBundle
+	t.Cleanup(func() { f_caBundle = origCABundle })
+	f_caBundle = ""
+	Expect(configureUpstreamTLS()).To(Succeed())
+
+	handler := newProxyChain(t, "p, tlsuser, datasource1, cluster1/test-ns, read", server.URL)
+	w := requestWithContext(t, handler, "GET", "/api/v1/query?query=up", "tlsuser", "datasource1")
+	// Reverse proxy error handler returns 502 when the upstream TLS handshake fails
+	Expect(w.Code).To(Equal(http.StatusBadGateway))
+}
+
+// TestPolicyHotReload verifies that changes to policy.csv are picked up
+// without a restart.
+func TestPolicyHotReload(t *testing.T) {
+	RegisterTestingT(t)
+
+	upstream, received := newUpstream(t)
+	policyDir := t.TempDir()
+	Expect(os.WriteFile(filepath.Join(policyDir, "model.conf"), []byte(testModel), 0644)).To(Succeed())
+	policyPath := filepath.Join(policyDir, "policy.csv")
+	Expect(os.WriteFile(policyPath, []byte("p, firstuser, datasource1, cluster1/ns1, read\n"), 0644)).To(Succeed())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	authz, err := NewAuthzService(ctx, policyDir)
+	Expect(err).To(BeNil())
+
+	promProxy, cleanup, err := newPrometheusProxy(upstream.URL, "namespace", "cluster")
+	t.Cleanup(cleanup)
+	Expect(err).To(BeNil())
+	handler := authz.authzMiddleware("read")(promProxy)
+
+	// Initially authorized
+	w := requestWithContext(t, handler, "GET", "/api/v1/query?query=up", "firstuser", "datasource1")
+	Expect(w.Code).To(Equal(http.StatusOK))
+
+	// Second user is not yet authorized
+	w = requestWithContext(t, handler, "GET", "/api/v1/query?query=up", "seconduser", "datasource1")
+	Expect(w.Code).To(Equal(http.StatusForbidden))
+
+	// Reload the policy to add the second user
+	newPolicy := "p, firstuser, datasource1, cluster1/ns1, read\np, seconduser, datasource1, cluster1/ns2, read\n"
+	Expect(os.WriteFile(policyPath, []byte(newPolicy), 0644)).To(Succeed())
+
+	// The watcher reloads asynchronously; wait for the new policy to apply.
+	Eventually(func() int {
+		w := requestWithContext(t, handler, "GET", "/api/v1/query?query=up", "seconduser", "datasource1")
+		return w.Code
+	}, 5*time.Second, 100*time.Millisecond).Should(Equal(http.StatusOK))
+	Expect((*received)[len(*received)-1]).To(Equal(`up{cluster=~"cluster1",namespace=~"ns2"}`))
 }
